@@ -5,6 +5,9 @@ type tie<class>
 // 参数元素类型静态已知，函数内可直接下标读取。消元用**局部 f64 表 + 下标赋值**。
 // 数值用 f64 字面量（tie 二元运算两侧类型必须一致）。
 // 调用：import 后 linalg.mat_mul(a, b, n) / linalg.det(a, n) 等
+// L2 数值训练段（文件尾）依赖 /ext/tensor.tie 的 Tensor/TMAX 容量池 ABI。
+import "/ext/tensor.tie";
+using tensor;
 
 namespace linalg {
 // i64 → f64（tie 无隐式转换）。
@@ -389,5 +392,86 @@ func abs_f(v: f64) -> f64 {
         return -v
     }
     return v
+}
+
+// ============================================================
+// L2 数值训练段（与上共命名空间 linalg）：nn/diffusion 训练用矩阵层。
+// 依赖 /ext/tensor.tie 的 Tensor/TMAX（固定容量池 ABI）。矩阵按行主序展平
+// 进同一容量池；内积用 f64 累加再回写 f32（长内积数值稳定，见下注释）。
+// EN: L2 numerics segment — f32 capacity-pool ABI (Tensor from /ext/tensor.tie),
+// f64 inner accumulation -> f32 for long-k stability.
+// ============================================================
+// 行主序 n×m 矩阵乘法：out[n*m]；out(i,j) = Σ_k a(i,k)*b(k,j)。
+//   a 为 n×k，b 为 k×m，out 为 n×m，均行主序展平进同一容量池。
+//   内层 i-k 步进，内积 f64 累加后一次写回 f32（稳定；f32 逐元素累加相对误差
+//   随 k 增长，f64 保留 ~52 位尾数可压到 f32 ulp 量级）。
+pub func matmul_f32(a: ref array<f32, 1024>, n: i64, m: i64, k: i64, b: ref array<f32, 1024>, out: ref array<f32, 1024>) {
+    var i: i64 = 0
+    while i < n {
+        var j: i64 = 0
+        while j < m {
+            var acc: f64 = 0.0
+            var r: i64 = 0
+            while r < k {
+                acc = acc + as_f64(a[i * k + r]) * as_f64(b[r * m + j])
+                r = r + 1
+            }
+            out[i * m + j] = as_f32(acc)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// transpose：2D 转置（shape0×shape1 → shape1×shape0），返回新 Tensor（值语义）。
+pub func transpose(me: ref array<f32, 1024>, t: Tensor) -> Tensor {
+    var n = t.shape0
+    var m = t.shape1
+    var nel = n * m
+    var d: array<f32, 1024> = array_init(0.0)
+    var i: i64 = 0
+    while i < n {
+        var j: i64 = 0
+        while j < m {
+            d[j * n + i] = me[i * m + j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Tensor(d, m, n, 1, 1, 2, nel)
+}
+
+// dot：两向量点积（公共 min 长度），f64 返回。
+pub func dot(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i64) -> f64 {
+    var L = na
+    if nb < L {
+        L = nb
+    }
+    var s: f64 = 0.0
+    var i: i64 = 0
+    while i < L {
+        s = s + as_f64(ma[i]) * as_f64(mb[i])
+        i = i + 1
+    }
+    return s
+}
+
+// mse：均方误差 = mean((a-b)^2)（公共 min 长度，L3 loss 用），f64 返回；L==0 返 0。
+pub func mse(ma: ref array<f32, 1024>, ta: Tensor, mb: ref array<f32, 1024>, tb: Tensor) -> f64 {
+    var L = ta.len
+    if tb.len < L {
+        L = tb.len
+    }
+    if L <= 0 {
+        return 0.0
+    }
+    var s: f64 = 0.0
+    var i: i64 = 0
+    while i < L {
+        var d: f64 = as_f64(ma[i]) - as_f64(mb[i])
+        s = s + d * d
+        i = i + 1
+    }
+    return s / as_f64(L)
 }
 }
