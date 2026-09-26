@@ -1,0 +1,209 @@
+type tie<class>
+// tlib/std/prelude.tie —— 语言前置基元（p.9.13.2）
+// EN: language prelude primitives (p.9.13.2).
+// ============================================================
+// 编译器级**隐式前置**：本模块由编译器自动 import（免用户 import、免前缀），其
+// `lang` 命名空间的 pub 函数经 `using` 暴露为全局裸名。同名用户定义优先遮蔽。
+//
+// 设计依据 docs/designs/tie-primitive-op-design.md §2：精选**平台无关**函数；
+// 平台相关（文件/进程/网络/时钟）不进前置。
+//
+// ============================================================
+// 关键设计：**本模块自包含 —— 不 import 任何 std 模块**（实测教训）
+// ============================================================
+// 初版用 `import "/std/string.tie" as ...` + using 复用既有实现，触发三处真实回归：
+//   1) **命名空间别名覆盖**：同一文件被两个不同别名 import（prelude 的 prelude_str
+//      与用户的 str）时，tie 的别名注册互相覆盖 —— 用户侧 `str.slice(...)` 报「未定义」。
+//   2) **改用与库一致的别名（str）仍失败**：与调用方已有的 `str` 别名重复 import
+//      同一文件时，命名空间函数注册丢失，同样报「未定义」。
+//   3) **整表 using 抢占同名不同签名**：整表引入的 str.find(s, sub) 与用户自定义
+//      的 find(a: i64) 同名不同签名，裸调用被解析到前者 → 参数个数不匹配。
+// 结论：**前置模块必须自包含**——只用语言原语（str_len / str_char / char_code /
+// str_from_code / 字符串拼接）实现，不 import 任何模块、不注册任何别名，从而对
+// 调用方的 import 图零干扰；并且**逐个包装只暴露精选名单**，绝不整表 using。
+//
+// ---- 名单纪律（放宽新名字前必读）----
+// 入选条件：签名**独特**（用户极少自定义同名同形函数）。已实测排除的高风险名：
+//   find / contains / slice / clone / replace / split / join / repeat（用户常自定义
+//   且签名各异）· abs / max / min（用户几乎必然自定义）。这些保持显式限定名
+//   （str.split / math.max）可用，只是不进前置裸名。
+//
+// ---- 性能说明 ----
+// 本模块函数用**逐字符拼接**实现（O(n²)）。前置定位是「免 import 的便利入口」，
+// 输入通常是短串（配置键、标签、命令名）；处理长串或热点路径请显式用
+// `str.trim` / `str.to_upper`（O(n) 版本，std/string.tie）。
+// 大小写转换只覆盖 ASCII a-z / A-Z（保守：不做 Unicode 大小写折叠）。
+
+namespace lang {
+
+// 单字符是否空白（空格 / 制表 / 换行 / 回车）。
+func is_ws(c: string) -> bool {
+    if c == " " {
+        return true
+    }
+    if c == "\t" {
+        return true
+    }
+    if c == "\n" {
+        return true
+    }
+    if c == "\r" {
+        return true
+    }
+    return false
+}
+
+// 从 from 起把剩余字符拼成新串（内部用；O(n²) 见文件头性能说明）。
+func tail_from(s: string, from: i64) -> string {
+    var n = str_len(s)
+    var out = ""
+    var i = from
+    while i < n {
+        out = out + str_char(s, i)
+        i = i + 1
+    }
+    return out
+}
+
+// 把 [start, end) 区间字符拼成新串（内部用）。
+func range_str(s: string, start: i64, end: i64) -> string {
+    var out = ""
+    var i = start
+    while i < end {
+        out = out + str_char(s, i)
+        i = i + 1
+    }
+    return out
+}
+
+// ---- 字符串：空白裁剪 ----
+
+pub func trim_start(s: string) -> string {
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n && is_ws(str_char(s, i)) {
+        i = i + 1
+    }
+    if i == 0 {
+        return s
+    }
+    return tail_from(s, i)
+}
+
+pub func trim_end(s: string) -> string {
+    var n = str_len(s)
+    while n > 0 && is_ws(str_char(s, n - 1)) {
+        n = n - 1
+    }
+    if n == str_len(s) {
+        return s
+    }
+    return range_str(s, 0, n)
+}
+
+pub func trim(s: string) -> string {
+    return trim_end(trim_start(s))
+}
+
+// ---- 字符串：大小写（ASCII）----
+
+pub func to_upper(s: string) -> string {
+    var n = str_len(s)
+    var out = ""
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        var cp = char_code(c)
+        if cp >= 97 && cp <= 122 {
+            out = out + str_from_code(cp - 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub func to_lower(s: string) -> string {
+    var n = str_len(s)
+    var out = ""
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        var cp = char_code(c)
+        if cp >= 65 && cp <= 90 {
+            out = out + str_from_code(cp + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ---- 字符串：前缀 / 后缀判定 ----
+
+pub func starts_with(s: string, prefix: string) -> bool {
+    var n = str_len(s)
+    var m = str_len(prefix)
+    if m > n {
+        return false
+    }
+    var i: i64 = 0
+    while i < m {
+        if str_char(s, i) != str_char(prefix, i) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+pub func ends_with(s: string, suffix: string) -> bool {
+    var n = str_len(s)
+    var m = str_len(suffix)
+    if m > n {
+        return false
+    }
+    var off = n - m
+    var i: i64 = 0
+    while i < m {
+        if str_char(s, off + i) != str_char(suffix, i) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// ---- 数学：区间钳制 / 整数幂 ----
+
+pub func clamp_i(x: i64, lo: i64, hi: i64) -> i64 {
+    if x < lo {
+        return lo
+    }
+    if x > hi {
+        return hi
+    }
+    return x
+}
+
+// 整数快速幂（平方求幂，O(log n)）；n 为负返回 0（i64 无分数结果）。
+pub func pow_i(x: i64, n: i64) -> i64 {
+    if n < 0 {
+        return 0
+    }
+    var base = x
+    var e = n
+    var acc: i64 = 1
+    while e > 0 {
+        if e % 2 == 1 {
+            acc = acc * base
+        }
+        base = base * base
+        e = e / 2
+    }
+    return acc
+}
+
+}
