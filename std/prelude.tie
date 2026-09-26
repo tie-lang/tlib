@@ -206,4 +206,34 @@ pub func pow_i(x: i64, n: i64) -> i64 {
     return acc
 }
 
+// ---- 表元素查找（供 `in` 中缀脱糖；p.9.13.3）----
+// `elem in container` 由解析器脱糖为 `lang::seq_has(container, elem)`。
+// 泛型单态化使其覆盖任意元素类型（table<i64> / table<string> / struct 行池等），
+// 故一个名字即可服务全部表类型（tie 不支持按类型重载）。
+// 复杂度：顺序扫描 O(n)；热点路径的大表查找请改用 map（键查找 O(1)）。
+pub func seq_has<T>(t: table<T>, v: T) -> bool {
+    var n = len(t)
+    var i: i64 = 0
+    while i < n {
+        if t[i] == v {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// 下标查找（返回首达下标，未命中 -1）；供需要位置的调用方使用。
+pub func seq_index<T>(t: table<T>, v: T) -> i64 {
+    var n = len(t)
+    var i: i64 = 0
+    while i < n {
+        if t[i] == v {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
 }
