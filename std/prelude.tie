@@ -302,7 +302,27 @@ pub func map_has<V>(m: map<V>, k: string) -> bool {
     return map_contains(m, k)
 }
 
-// 表拼接（供 `+` 扩展；p.9.13.3）：返回**新表**（值语义），不改动入参。
+// 映射合并（供 `+` 扩展；p.9.13.3）：返回**新映射**（值语义），不改动入参。
+// 键冲突以 **b 的值覆盖 a**（右覆盖左，对齐「后者优先」的合并直觉）。
+// 实现要点：从**空 map 字面量**起逐键写入——`m[k] = v` 的映射下标赋值可用，
+// 且**不能**写 `var out = a`（实测 tie 的表/映射赋值是**别名**，会改到入参）。
+// 复杂度 O(|a|+|b|)。
+pub func map_cat<V>(a: map<V>, b: map<V>) -> map<V> {
+    var out: map<V> = {}
+    var ka = map_keys(a)
+    var i: i64 = 0
+    while i < len(ka) {
+        out[ka[i]] = a[ka[i]]
+        i = i + 1
+    }
+    var kb = map_keys(b)
+    var j: i64 = 0
+    while j < len(kb) {
+        out[kb[j]] = b[kb[j]]
+        j = j + 1
+    }
+    return out
+}
 // 实现：从**空表**起逐元素搬入 a、再搬 b——不能写 `var out = a`，实测 tie 的
 // 表赋值是**别名**（对 out 的 push 会改到 a），故必须从空表开始重建。
 // 复杂度 O(n+m)；大表慎用（设计与 p.9.11.6 `with` 同款性能裁决）。
