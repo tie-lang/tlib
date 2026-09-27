@@ -302,4 +302,23 @@ pub func map_has<V>(m: map<V>, k: string) -> bool {
     return map_contains(m, k)
 }
 
+// 表拼接（供 `+` 扩展；p.9.13.3）：返回**新表**（值语义），不改动入参。
+// 实现：从**空表**起逐元素搬入 a、再搬 b——不能写 `var out = a`，实测 tie 的
+// 表赋值是**别名**（对 out 的 push 会改到 a），故必须从空表开始重建。
+// 复杂度 O(n+m)；大表慎用（设计与 p.9.11.6 `with` 同款性能裁决）。
+pub func tbl_cat<T>(a: table<T>, b: table<T>) -> table<T> {
+    var out: table<T> = []
+    var i: i64 = 0
+    while i < len(a) {
+        table_push(out, a[i])
+        i = i + 1
+    }
+    var j: i64 = 0
+    while j < len(b) {
+        table_push(out, b[j])
+        j = j + 1
+    }
+    return out
+}
+
 }
