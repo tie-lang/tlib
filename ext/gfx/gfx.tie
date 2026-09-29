@@ -103,7 +103,7 @@ namespace gfx {
     // —— Surface ——
     pub func surface_create(w: i64, h: i64) -> Surface {
         unsafe {
-            var p: ptr<u8> = sk_surface_create(as_i32(w), as_i32(h))
+            var p: ptr<u8> = sk_surface_create(to_i32(w), to_i32(h))
             var s = Surface(ptr_to_int(p))
             arena_track(s.h, 0)
             return s
@@ -287,7 +287,7 @@ namespace gfx {
             var buf: ptr<u8> = alloc(nc)
             var j: i64 = 0
             while j < nc {
-                deref_write(ptr_add(buf, j), as_i8(as_i64(bytes[j])))
+                deref_write(ptr_add(buf, j), to_i8(to_i64(bytes[j])))
                 j = j + 1
             }
             var w = sk_font_measure(fp, buf, nc)
@@ -315,7 +315,7 @@ namespace gfx {
             var buf: ptr<u8> = alloc(nc)
             var j: i64 = 0
             while j < nc {
-                deref_write(ptr_add(buf, j), as_i8(str_byte(s, j)))
+                deref_write(ptr_add(buf, j), to_i8(str_byte(s, j)))
                 j = j + 1
             }
             var w = sk_font_measure(f, buf, nc)
@@ -337,7 +337,7 @@ namespace gfx {
             var k = cmds[i]
             // 0 CLEAR [0, color]
             if k == 0 {
-                canvas_clear(c, as_u32(as_i64(cmds[i + 1])))
+                canvas_clear(c, to_u32(to_i64(cmds[i + 1])))
                 i = i + 2
             } else {
                 // 1 FILL_RECT / 2 STROKE_RECT [k, l,t,r,b, color, extra]
@@ -346,14 +346,14 @@ namespace gfx {
                     var t = bitcast_i64_f64(cmds[i + 2])
                     var r = bitcast_i64_f64(cmds[i + 3])
                     var b = bitcast_i64_f64(cmds[i + 4])
-                    var color = as_u32(as_i64(cmds[i + 5]))
+                    var color = to_u32(to_i64(cmds[i + 5]))
                     var extra = cmds[i + 6]
                     var style: i32 = 0
                     if k == 2 { style = 1 }
                     var aa: i32 = 0
                     var width: f64 = 0.0
                     if k == 1 {
-                        aa = as_i32(extra)
+                        aa = to_i32(extra)
                     } else {
                         width = bitcast_i64_f64(extra)
                     }
@@ -365,7 +365,7 @@ namespace gfx {
                         var size = bitcast_i64_f64(cmds[i + 1])
                         var x = bitcast_i64_f64(cmds[i + 2])
                         var y = bitcast_i64_f64(cmds[i + 3])
-                        var color = as_u32(as_i64(cmds[i + 4]))
+                        var color = to_u32(to_i64(cmds[i + 4]))
                         var nc = cmds[i + 5]
                         unsafe {
                             var cf: ptr<u8> = int_to_ptr(c.h)
@@ -373,7 +373,7 @@ namespace gfx {
                             var buf: ptr<u8> = alloc(nc)
                             var j: i64 = 0
                             while j < nc {
-                                deref_write(ptr_add(buf, j), as_i8(as_i64(cmds[i + 6 + j])))
+                                deref_write(ptr_add(buf, j), to_i8(to_i64(cmds[i + 6 + j])))
                                 j = j + 1
                             }
                             var pp = TSkPaint(color, 0, 0, 0.0)
@@ -384,9 +384,9 @@ namespace gfx {
                         i = i + 6 + nc
                     } else if k == 4 {
                         // PATH [4, color, style, aa, width_bits, closed, npts, x0,y0, x1,y1, ..]
-                        var color = as_u32(as_i64(cmds[i + 1]))
-                        var style = as_i32(cmds[i + 2])
-                        var aa = as_i32(cmds[i + 3])
+                        var color = to_u32(to_i64(cmds[i + 1]))
+                        var style = to_i32(cmds[i + 2])
+                        var aa = to_i32(cmds[i + 3])
                         var width = bitcast_i64_f64(cmds[i + 4])
                         var closed = cmds[i + 5]
                         var npts = cmds[i + 6]
@@ -412,7 +412,7 @@ namespace gfx {
                             var buf: ptr<u8> = alloc(nb)
                             var j: i64 = 0
                             while j < nb {
-                                deref_write(ptr_add(buf, j), as_i8(as_i64(cmds[i + 4 + j])))
+                                deref_write(ptr_add(buf, j), to_i8(to_i64(cmds[i + 4 + j])))
                                 j = j + 1
                             }
                             var im: ptr<u8> = sk_image_make_from_encoded(buf, nb)
@@ -445,7 +445,7 @@ namespace gfx {
                     if kind == 5 {
                         sk_path_free(p)
                     } else {
-                        sk_obj_release(p, as_i32(kind))
+                        sk_obj_release(p, to_i32(kind))
                     }
                 }
                 g_arena_ptr[i] = 0

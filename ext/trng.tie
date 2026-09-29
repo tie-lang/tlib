@@ -45,7 +45,7 @@ func _aval(z: i64) -> i64 {
 func _u_probe(r: Rng) -> (r2: Rng, v2: f64) {
     var p = next(r)
     var u = (p.v2 >> 11) & 0x1FFFFFFFFFFFFF
-    return (p.r2, as_f64(u + 1) / 9007199254740992.0)
+    return (p.r2, to_f64(u + 1) / 9007199254740992.0)
 }
 
 // 新建 Rng：seed 散列铺满双槽（非零保护），同 seed 恒同序列。(new Rng from seed, same seed ⇒ same seq.)
@@ -82,7 +82,7 @@ pub func next_i64(r: Rng) -> (r2: Rng, v2: i64) {
 pub func float01(r: Rng) -> (r2: Rng, v2: f64) {
     var p = next(r)
     var u = (p.v2 >> 11) & 0x1FFFFFFFFFFFFF
-    return (p.r2, as_f64(u) / 9007199254740992.0)
+    return (p.r2, to_f64(u) / 9007199254740992.0)
 }
 
 // [lo, hi) 均匀浮点：lo + u*(hi-lo)。(uniform float in [lo, hi).)
@@ -98,7 +98,7 @@ pub func int_range(r: Rng, lo: i64, hi: i64) -> (r2: Rng, v2: i64) {
         return (r, lo)
     }
     var p = float01(r)
-    var idx = as_i64(p.v2 * as_f64(w))
+    var idx = to_i64(p.v2 * to_f64(w))
     if idx >= w {
         idx = w - 1
     }

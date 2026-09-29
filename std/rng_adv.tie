@@ -159,7 +159,7 @@ pub func irange(r: ref table<i64>, a: i64, b: i64) -> i64 {
 pub func float(r: ref table<i64>) -> f64 {
     var val = next(r)
     var frac = val & 9007199254740991        // (1<<53)-1
-    var f: f64 = as_f64(frac)
+    var f: f64 = to_f64(frac)
     return f / 9007199254740992.0            // 2^53
 }
 
@@ -218,7 +218,7 @@ pub func crypto_bytes(n: i64) -> table<i64> {
         }
         var i: i64 = 0
         while i < n {
-            table_push(out, as_i64(deref(ptr_add(p, i))))
+            table_push(out, to_i64(deref(ptr_add(p, i))))
             i = i + 1
         }
     }

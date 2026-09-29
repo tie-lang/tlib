@@ -114,7 +114,7 @@ namespace tensor {
         var d: array<f32, 1024> = array_init(0.0)
         var i: i64 = 0
         while i < nel {
-            d[i] = as_f32(fill)
+            d[i] = to_f32(fill)
             i = i + 1
         }
         return Tensor(d, s0, s1, s2, s3, n, nel)
@@ -153,7 +153,7 @@ namespace tensor {
     // 线性下标写（窄化为 f32）。
     // EN: write value at linear index i.
     pub func set(me: ref array<f32, 1024>, t: Tensor, i: i64, v: f64) {
-        me[i] = as_f32(v)
+        me[i] = to_f32(v)
     }
 
     // 3D 定位写：idx = x + X*y + X*Y*z。
@@ -161,7 +161,7 @@ namespace tensor {
     pub func set3(me: ref array<f32, 1024>, t: Tensor, x: i64, y: i64, z: i64, v: f64) {
         var X = t.shape0
         var Y = t.shape1
-        me[x + X * y + X * Y * z] = as_f32(v)
+        me[x + X * y + X * Y * z] = to_f32(v)
     }
 
     // reshape：校验新 len==t.len 且 <=TMAX（y 维度 ≤YMAX）。不改数据，返回新元数据。
@@ -336,7 +336,7 @@ namespace tensor {
     pub func fill(me: ref array<f32, 1024>, t: Tensor, v: f64) {
         var i: i64 = 0
         while i < t.len {
-            me[i] = as_f32(v)
+            me[i] = to_f32(v)
             i = i + 1
         }
     }
@@ -346,7 +346,7 @@ namespace tensor {
     pub func scale(me: ref array<f32, 1024>, t: Tensor, s: f64) {
         var i: i64 = 0
         while i < t.len {
-            me[i] = as_f32(as_f64(me[i]) * s)
+            me[i] = to_f32(to_f64(me[i]) * s)
             i = i + 1
         }
     }
@@ -356,14 +356,14 @@ namespace tensor {
     pub func clip(me: ref array<f32, 1024>, t: Tensor, lo: f64, hi: f64) {
         var i: i64 = 0
         while i < t.len {
-            var v: f64 = as_f64(me[i])
+            var v: f64 = to_f64(me[i])
             if v < lo {
                 v = lo
             }
             if v > hi {
                 v = hi
             }
-            me[i] = as_f32(v)
+            me[i] = to_f32(v)
             i = i + 1
         }
     }
@@ -374,7 +374,7 @@ namespace tensor {
         var s: f64 = 0.0
         var i: i64 = 0
         while i < t.len {
-            s = s + as_f64(me[i])
+            s = s + to_f64(me[i])
             i = i + 1
         }
         return s
@@ -386,7 +386,7 @@ namespace tensor {
         if t.len <= 0 {
             return 0.0
         }
-        return sum(me, t) / as_f64(t.len)
+        return sum(me, t) / to_f64(t.len)
     }
 
     // max：最大值（f32）；len==0 返回 0。
@@ -445,13 +445,13 @@ namespace tensor {
             // f32 逐元素算术在本版 tiec 会误生成 fadd/fmul double 触发 opt 崩溃，
             // 故一律升 f64 计算再窄化回 f32（见文件头 ABI 说明）。
             if op == 0 {
-                out[i] = as_f32(as_f64(av) + as_f64(bv))
+                out[i] = to_f32(to_f64(av) + to_f64(bv))
             } else if op == 1 {
-                out[i] = as_f32(as_f64(av) - as_f64(bv))
+                out[i] = to_f32(to_f64(av) - to_f64(bv))
             } else if op == 2 {
-                out[i] = as_f32(as_f64(av) * as_f64(bv))
+                out[i] = to_f32(to_f64(av) * to_f64(bv))
             } else {
-                out[i] = as_f32(as_f64(av) / as_f64(bv))
+                out[i] = to_f32(to_f64(av) / to_f64(bv))
             }
             i = i + 1
         }
@@ -483,7 +483,7 @@ namespace tensor {
     pub func add_scalar(me: ref array<f32, 1024>, t: Tensor, v: f32) {
         var i: i64 = 0
         while i < t.len {
-            me[i] = as_f32(as_f64(me[i]) + as_f64(v))
+            me[i] = to_f32(to_f64(me[i]) + to_f64(v))
             i = i + 1
         }
     }

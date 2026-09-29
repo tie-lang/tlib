@@ -67,7 +67,7 @@ func grad_band(theme: i64, i: i64, n: i64) -> u32 {
         g = 30 + (47 - 30) * i / hi
         b = 38 + (58 - 38) * i / hi
     }
-    return as_u32(4278190080 | (r << 16) | (g << 8) | b)   // 0xFF000000 | RGB
+    return to_u32(4278190080 | (r << 16) | (g << 8) | b)   // 0xFF000000 | RGB
 }
 
 // ---- 8x8 洋红 RGBA 合法 PNG（p.6.8.8 同款，QI 内联字节表 → IMAGE 命令）----
@@ -134,17 +134,17 @@ func build_scene(theme: i64, preview: i64, clicked: i64, cx: i64, cy: i64) -> ta
         // ---- 预览模式：线框（只画 row/column 盒；深底高亮线）----
         commands.cmd_clear(cs, grad_band(1, NBAND - 1, NBAND))
         var lw: f64 = 2.0
-        commands.cmd_stroke_rect(cs, as_f64(hx), as_f64(hy), as_f64(hx + hw), as_f64(hy + hh),
+        commands.cmd_stroke_rect(cs, to_f64(hx), to_f64(hy), to_f64(hx + hw), to_f64(hy + hh),
             C_GREY, lw)
-        commands.cmd_stroke_rect(cs, as_f64(mx), as_f64(my), as_f64(mx + mw), as_f64(my + mh),
+        commands.cmd_stroke_rect(cs, to_f64(mx), to_f64(my), to_f64(mx + mw), to_f64(my + mh),
             C_YELLOW, lw)
-        commands.cmd_stroke_rect(cs, as_f64(sx), as_f64(sy), as_f64(sx + sw), as_f64(sy + sh),
+        commands.cmd_stroke_rect(cs, to_f64(sx), to_f64(sy), to_f64(sx + sw), to_f64(sy + sh),
             C_GREY, lw)
-        commands.cmd_stroke_rect(cs, as_f64(rx), as_f64(ry), as_f64(rx + rw), as_f64(ry + rh),
+        commands.cmd_stroke_rect(cs, to_f64(rx), to_f64(ry), to_f64(rx + rw), to_f64(ry + rh),
             C_RED, lw)
-        commands.cmd_stroke_rect(cs, as_f64(gx), as_f64(gy), as_f64(gx + gw), as_f64(gy + gh),
+        commands.cmd_stroke_rect(cs, to_f64(gx), to_f64(gy), to_f64(gx + gw), to_f64(gy + gh),
             C_GREEN, lw)
-        commands.cmd_stroke_rect(cs, as_f64(ix), as_f64(iy), as_f64(ix + iw), as_f64(iy + ih),
+        commands.cmd_stroke_rect(cs, to_f64(ix), to_f64(iy), to_f64(ix + iw), to_f64(iy + ih),
             C_BLUE, lw)
         commands.cmd_text(cs, 16.0, 24.0, 40.0, C_WHITE,
             "PREVIEW mode: layout boxes (row/column). SPACE/R to return.")
@@ -157,47 +157,47 @@ func build_scene(theme: i64, preview: i64, clicked: i64, cx: i64, cy: i64) -> ta
     while bb < NBAND {
         var y0 = bb * 50
         var y1 = y0 + 50
-        commands.cmd_fill_rect(cs, 0.0, as_f64(y0), as_f64(W), as_f64(y1),
+        commands.cmd_fill_rect(cs, 0.0, to_f64(y0), to_f64(W), to_f64(y1),
             grad_band(theme, bb, NBAND), 1)
         bb = bb + 1
     }
     // 标题
     commands.cmd_text(cs, 20.0, 24.0, 36.0, textcol, "TieGfx Demo p.6.8.12  (click=theme+rect  SPACE/R=preview)")
     // main 盒描边
-    commands.cmd_stroke_rect(cs, as_f64(mx), as_f64(my), as_f64(mx + mw), as_f64(my + mh),
+    commands.cmd_stroke_rect(cs, to_f64(mx), to_f64(my), to_f64(mx + mw), to_f64(my + mh),
         textcol, 2.0)
     // 红矩形（fill）
-    commands.cmd_fill_rect(cs, as_f64(rx), as_f64(ry), as_f64(rx + rw), as_f64(ry + rh),
+    commands.cmd_fill_rect(cs, to_f64(rx), to_f64(ry), to_f64(rx + rw), to_f64(ry + rh),
         C_RED, 0)
-    commands.cmd_text(cs, 14.0, as_f64(rx) + 8.0, as_f64(ry) + 24.0, C_WHITE, "FILL_RECT")
+    commands.cmd_text(cs, 14.0, to_f64(rx) + 8.0, to_f64(ry) + 24.0, C_WHITE, "FILL_RECT")
     // 绿折线（path stroke）
     var pts = table_new_f64()
-    table_push(pts, as_f64(gx) + 11.0); table_push(pts, as_f64(gy + gh) - 20.0)
-    table_push(pts, as_f64(gx) + 76.0); table_push(pts, as_f64(gy) + 15.0)
-    table_push(pts, as_f64(gx) + 186.0); table_push(pts, as_f64(gy + gh) - 25.0)
-    table_push(pts, as_f64(gx) + 214.0); table_push(pts, as_f64(gy) + 43.0)
+    table_push(pts, to_f64(gx) + 11.0); table_push(pts, to_f64(gy + gh) - 20.0)
+    table_push(pts, to_f64(gx) + 76.0); table_push(pts, to_f64(gy) + 15.0)
+    table_push(pts, to_f64(gx) + 186.0); table_push(pts, to_f64(gy + gh) - 25.0)
+    table_push(pts, to_f64(gx) + 214.0); table_push(pts, to_f64(gy) + 43.0)
     commands.cmd_path(cs, C_GREEN, 1, 0, 4.0, 0, pts)
-    commands.cmd_text(cs, 14.0, as_f64(gx) + 8.0, as_f64(gy) + 24.0, textcol, "PATH stroke")
+    commands.cmd_text(cs, 14.0, to_f64(gx) + 8.0, to_f64(gy) + 24.0, textcol, "PATH stroke")
     // 图像（内联 8x8 PNG）
-    commands.cmd_stroke_rect(cs, as_f64(ix), as_f64(iy), as_f64(ix + iw), as_f64(iy + ih),
+    commands.cmd_stroke_rect(cs, to_f64(ix), to_f64(iy), to_f64(ix + iw), to_f64(iy + ih),
         textcol, 1.0)
     var ib = table_new_i64()
     push_png(ib)
-    commands.cmd_image(cs, as_f64(ix) + 20.0, as_f64(iy) + 30.0, ib)
-    commands.cmd_text(cs, 14.0, as_f64(ix) + 8.0, as_f64(iy) + 120.0, textcol, "IMAGE 8x8")
+    commands.cmd_image(cs, to_f64(ix) + 20.0, to_f64(iy) + 30.0, ib)
+    commands.cmd_text(cs, 14.0, to_f64(ix) + 8.0, to_f64(iy) + 120.0, textcol, "IMAGE 8x8")
 
     // 点击高亮（点击点主题色方点）
     if clicked != 0 {
         var ac: u32 = C_YELLOW
         if theme == 0 { ac = C_BLUE }
-        commands.cmd_fill_rect(cs, as_f64(cx), as_f64(cy), as_f64(cx) + 44.0, as_f64(cy) + 44.0,
+        commands.cmd_fill_rect(cs, to_f64(cx), to_f64(cy), to_f64(cx) + 44.0, to_f64(cy) + 44.0,
             ac, 0)
     }
 
     // 底部状态文本
     var status = "theme=" + to_string(theme) + " preview=" + to_string(preview) +
         " last-click=(" + to_string(cx) + "," + to_string(cy) + ")"
-    commands.cmd_text(cs, 16.0, 24.0, as_f64(sy) + 22.0, textcol, status)
+    commands.cmd_text(cs, 16.0, 24.0, to_f64(sy) + 22.0, textcol, status)
     return cs
 }
 

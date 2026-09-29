@@ -31,7 +31,7 @@ namespace commands {
     // 0 CLEAR：整面清色。
     pub func cmd_clear(cmds: table<i64>, color: u32) {
         table_push(cmds, 0)
-        table_push(cmds, as_i64(color))
+        table_push(cmds, to_i64(color))
     }
     // 1 FILL_RECT：实填充矩形（aa 0/1）。
     pub func cmd_fill_rect(cmds: table<i64>, l: f64, t: f64, r: f64, b: f64,
@@ -41,7 +41,7 @@ namespace commands {
         table_push(cmds, bitcast_f64_i64(t))
         table_push(cmds, bitcast_f64_i64(r))
         table_push(cmds, bitcast_f64_i64(b))
-        table_push(cmds, as_i64(color))
+        table_push(cmds, to_i64(color))
         table_push(cmds, aa)
     }
     // 2 STROKE_RECT：描边矩形（width 线宽 f64）。
@@ -52,7 +52,7 @@ namespace commands {
         table_push(cmds, bitcast_f64_i64(t))
         table_push(cmds, bitcast_f64_i64(r))
         table_push(cmds, bitcast_f64_i64(b))
-        table_push(cmds, as_i64(color))
+        table_push(cmds, to_i64(color))
         table_push(cmds, bitcast_f64_i64(width))
     }
     // 3 TEXT：文本绘制。s 逐字符写 UTF-8 字节值（ASCII 即码点；多字节 UTF-8 亦逐字节）。
@@ -63,7 +63,7 @@ namespace commands {
         table_push(cmds, bitcast_f64_i64(size))
         table_push(cmds, bitcast_f64_i64(x))
         table_push(cmds, bitcast_f64_i64(y))
-        table_push(cmds, as_i64(color))
+        table_push(cmds, to_i64(color))
         table_push(cmds, nc)
         var j: i64 = 0
         while j < nc {
@@ -78,8 +78,8 @@ namespace commands {
         var nvals = len(pts)
         var npts: i64 = nvals / 2
         table_push(cmds, 4)
-        table_push(cmds, as_i64(color))
-        table_push(cmds, as_i64(style))
+        table_push(cmds, to_i64(color))
+        table_push(cmds, to_i64(style))
         table_push(cmds, aa)
         table_push(cmds, bitcast_f64_i64(width))
         table_push(cmds, closed)

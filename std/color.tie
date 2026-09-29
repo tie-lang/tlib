@@ -159,8 +159,8 @@ pub func hsv_to_rgb(hsv: table<f64>) -> table<f64> {
         return out
     }
     var h6 = h / 60.0
-    var i: i64 = as_i64(floor(h6)) % 6
-    var f = h6 - as_f64(i)
+    var i: i64 = to_i64(floor(h6)) % 6
+    var f = h6 - to_f64(i)
     var p = v * (1.0 - s)
     var q = v * (1.0 - s * f)
     var t = v * (1.0 - s * (1.0 - f))
@@ -336,13 +336,13 @@ pub func parse_hex(s: string) -> table<f64> {
             return table_new_f64()
         }
         if per == 1 {
-            table_push(out, as_f64(hi * 17) / 255.0)
+            table_push(out, to_f64(hi * 17) / 255.0)
         } else {
             var lo = hex_val(str_byte(s, i + k * per + 1))
             if lo < 0 {
                 return table_new_f64()
             }
-            table_push(out, as_f64(hi * 16 + lo) / 255.0)
+            table_push(out, to_f64(hi * 16 + lo) / 255.0)
         }
         k = k + 1
     }
@@ -361,7 +361,7 @@ pub func to_hex(rgb: table<f64>) -> string {
         if v > 1.0 {
             v = 1.0
         }
-        var iv = as_i64(round(v * 255.0))
+        var iv = to_i64(round(v * 255.0))
         out = out + hex2b(iv)
         i = i + 1
     }

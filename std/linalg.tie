@@ -413,10 +413,10 @@ pub func matmul_f32(a: ref array<f32, 1024>, n: i64, m: i64, k: i64, b: ref arra
             var acc: f64 = 0.0
             var r: i64 = 0
             while r < k {
-                acc = acc + as_f64(a[i * k + r]) * as_f64(b[r * m + j])
+                acc = acc + to_f64(a[i * k + r]) * to_f64(b[r * m + j])
                 r = r + 1
             }
-            out[i * m + j] = as_f32(acc)
+            out[i * m + j] = to_f32(acc)
             j = j + 1
         }
         i = i + 1
@@ -450,7 +450,7 @@ pub func dot(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i6
     var s: f64 = 0.0
     var i: i64 = 0
     while i < L {
-        s = s + as_f64(ma[i]) * as_f64(mb[i])
+        s = s + to_f64(ma[i]) * to_f64(mb[i])
         i = i + 1
     }
     return s
@@ -468,10 +468,10 @@ pub func mse(ma: ref array<f32, 1024>, ta: Tensor, mb: ref array<f32, 1024>, tb:
     var s: f64 = 0.0
     var i: i64 = 0
     while i < L {
-        var d: f64 = as_f64(ma[i]) - as_f64(mb[i])
+        var d: f64 = to_f64(ma[i]) - to_f64(mb[i])
         s = s + d * d
         i = i + 1
     }
-    return s / as_f64(L)
+    return s / to_f64(L)
 }
 }

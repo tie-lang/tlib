@@ -32,12 +32,12 @@ pub func strong_bytes(n: i64) -> table<i64> {
     unsafe {
         var p: ptr<u8> = alloc(n)
         // hAlgorithm=NULL + BCRYPT_USE_SYSTEM_PREFERRED_RNG（系统首选 CSPRNG）
-        if BCryptGenRandom(0, p, as_u32(n), 2u32) != 0 {
+        if BCryptGenRandom(0, p, to_u32(n), 2u32) != 0 {
             return table_new_i64()
         }
         var i: i64 = 0
         while i < n {
-            table_push(out, as_i64(deref(ptr_add(p, i))))
+            table_push(out, to_i64(deref(ptr_add(p, i))))
             i = i + 1
         }
     }
