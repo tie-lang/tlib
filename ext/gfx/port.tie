@@ -66,12 +66,12 @@ pub func render_pixels(d: PortDesc, cmds: table<i64>) -> table<i64> {
     gfx.run_commands(c, cmds)
     var info = gfx.surface_peek(s)
     var row = info.row_bytes
-    var nbytes = as_i64(row) * as_i64(info.h)
+    var nbytes = to_i64(row) * to_i64(info.h)
     unsafe {
         var base: ptr<u8> = int_to_ptr(info.pixels)
         var i: i64 = 0
         while i < nbytes {
-            table_push(out, as_i64(deref(ptr_add(base, i))))
+            table_push(out, to_i64(deref(ptr_add(base, i))))
             i = i + 1
         }
     }

@@ -224,9 +224,9 @@ pub func shl_bits(a: table<i64>, k: i64) -> table<i64> {
         var carry: i64 = 0
         var i: i64 = 0
         while i < len(a) {
-            var v: u128 = (as_u128(a[i]) << bitShift) | as_u128(carry)
-            table_push(r, as_i64(v & 0xFFFFFFFFu128))
-            carry = as_i64(v >> 32)
+            var v: u128 = (to_u128(a[i]) << bitShift) | to_u128(carry)
+            table_push(r, to_i64(v & 0xFFFFFFFFu128))
+            carry = to_i64(v >> 32)
             i = i + 1
         }
         if carry > 0 {
@@ -260,13 +260,13 @@ pub func shr_bits(a: table<i64>, k: i64) -> table<i64> {
     var i: i64 = 0
     while i < nout - 1 {
         var p = i + limbShift
-        var win: u128 = (as_u128(a[p + 1]) << 32) | as_u128(a[p])
-        table_push(r, as_i64((win >> bitShift) & 0xFFFFFFFFu128))
+        var win: u128 = (to_u128(a[p + 1]) << 32) | to_u128(a[p])
+        table_push(r, to_i64((win >> bitShift) & 0xFFFFFFFFu128))
         i = i + 1
     }
     // 末 limb 仅剩窗口
-    var last: u128 = as_u128(a[len(a) - 1]) >> bitShift
-    table_push(r, as_i64(last & 0xFFFFFFFFu128))
+    var last: u128 = to_u128(a[len(a) - 1]) >> bitShift
+    table_push(r, to_i64(last & 0xFFFFFFFFu128))
     return trim(r)
 }
 
@@ -336,24 +336,24 @@ pub func add(a: table<i64>, b: table<i64>) -> table<i64> {
     if nb > nmax {
         nmax = nb
     }
-    var carry: u128 = as_u128(0)
+    var carry: u128 = to_u128(0)
     var i: i64 = 0
     while i < nmax {
-        var va: u128 = as_u128(0)
+        var va: u128 = to_u128(0)
         if i < na {
-            va = as_u128(a[i])
+            va = to_u128(a[i])
         }
-        var vb: u128 = as_u128(0)
+        var vb: u128 = to_u128(0)
         if i < nb {
-            vb = as_u128(b[i])
+            vb = to_u128(b[i])
         }
         var t: u128 = va + vb + carry
-        table_push(r, as_i64(t & 0xFFFFFFFFu128))
+        table_push(r, to_i64(t & 0xFFFFFFFFu128))
         carry = t >> 32
         i = i + 1
     }
-    if carry != as_u128(0) {
-        table_push(r, as_i64(carry & 0xFFFFFFFFu128))
+    if carry != to_u128(0) {
+        table_push(r, to_i64(carry & 0xFFFFFFFFu128))
     }
     // add 最高 limb 由进位决定，天然归一化（非空情形顶 limb 非 0）。
     return r
@@ -422,22 +422,22 @@ pub func mul(a: table<i64>, b: table<i64>) -> table<i64> {
     var r = zeros(na + nb)
     var i: i64 = 0
     while i < na {
-        var c: u128 = as_u128(0)
+        var c: u128 = to_u128(0)
         var j: i64 = 0
         while j < nb {
-            var t: u128 = as_u128(a[i]) * as_u128(b[j]) + as_u128(r[i + j]) + c
-            r[i + j] = as_i64(t & 0xFFFFFFFFu128)
+            var t: u128 = to_u128(a[i]) * to_u128(b[j]) + to_u128(r[i + j]) + c
+            r[i + j] = to_i64(t & 0xFFFFFFFFu128)
             c = t >> 32
             j = j + 1
         }
         // 把 c 折入 r[i+n]，可能 +1 进位向更高处传播（理论 c < B，见头部论证）。
-        var addv: u128 = c + as_u128(r[i + nb])
-        r[i + nb] = as_i64(addv & 0xFFFFFFFFu128)
+        var addv: u128 = c + to_u128(r[i + nb])
+        r[i + nb] = to_i64(addv & 0xFFFFFFFFu128)
         var cc = addv >> 32
         var k: i64 = i + nb + 1
-        while cc != as_u128(0) && k < na + nb {
-            var vv: u128 = as_u128(r[k]) + cc
-            r[k] = as_i64(vv & 0xFFFFFFFFu128)
+        while cc != to_u128(0) && k < na + nb {
+            var vv: u128 = to_u128(r[k]) + cc
+            r[k] = to_i64(vv & 0xFFFFFFFFu128)
             cc = vv >> 32
             k = k + 1
         }
@@ -477,20 +477,20 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
 
     // ---- 单 limb 除数快路径 ----
     if bn == 1 {
-        var v0: u128 = as_u128(b[0])
+        var v0: u128 = to_u128(b[0])
         var qb1 = zeros(an)   // 改名避免与 entry 预声明 q 冲突（p.6.1.7-RCA-2）
-        var r: u128 = as_u128(0)
+        var r: u128 = to_u128(0)
         var i: i64 = an - 1
         while i >= 0 {
-            var cur: u128 = (r << 32) | as_u128(a[i])
+            var cur: u128 = (r << 32) | to_u128(a[i])
             var qi: u128 = cur / v0
             r = cur % v0
-            qb1[i] = as_i64(qi & 0xFFFFFFFFu128)
+            qb1[i] = to_i64(qi & 0xFFFFFFFFu128)
             i = i - 1
         }
         var rt = table_new_i64()
-        if r != as_u128(0) {
-            table_push(rt, as_i64(r))
+        if r != to_u128(0) {
+            table_push(rt, to_i64(r))
         }
         return (trim(qb1), rt)
     }
@@ -520,17 +520,17 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
 
     var vn1: i64 = V[n - 1]
     var vn2: i64 = V[n - 2]
-    var vn1s: u128 = as_u128(vn1)
-    var vn2s: u128 = as_u128(vn2)
+    var vn1s: u128 = to_u128(vn1)
+    var vn2s: u128 = to_u128(vn2)
 
     var j: i64 = m
     while j >= 0 {
         var ujn = U[j + n]
         var ujn1 = U[j + n - 1]
         var ujn2 = U[j + n - 2]
-        var a2: u128 = (as_u128(ujn) << 32) | as_u128(ujn1)
-        var qhat: u128 = as_u128(0)
-        var rhat: u128 = as_u128(0)
+        var a2: u128 = (to_u128(ujn) << 32) | to_u128(ujn1)
+        var qhat: u128 = to_u128(0)
+        var rhat: u128 = to_u128(0)
         if ujn == vn1 {
             qhat = 0xFFFFFFFFu128
             rhat = a2 - (qhat * vn1s)
@@ -538,7 +538,7 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
             qhat = a2 / vn1s
             rhat = a2 % vn1s
         }
-        var topC: u128 = as_u128(ujn2)
+        var topC: u128 = to_u128(ujn2)
         // 校正（D3）：至多 2 次，rhat≥B 即终止
         while true {
             var tooBig: bool = qhat > 0xFFFFFFFFu128
@@ -546,19 +546,19 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
             if !tooBig && !bigProd {
                 break
             }
-            qhat = qhat - as_u128(1)
+            qhat = qhat - to_u128(1)
             rhat = rhat + vn1s
             if rhat > 0xFFFFFFFFu128 {
                 break
             }
         }
         // 乘减（D4）：U[j..j+n] -= qhat*V
-        var borrow: u128 = as_u128(0)
+        var borrow: u128 = to_u128(0)
         var i4: i64 = 0
         while i4 < n {
-            var p: u128 = qhat * as_u128(V[i4]) + borrow
+            var p: u128 = qhat * to_u128(V[i4]) + borrow
             var ucur: i64 = U[j + i4]
-            var lo: i64 = as_i64(p & 0xFFFFFFFFu128)
+            var lo: i64 = to_i64(p & 0xFFFFFFFFu128)
             var nv: i64 = ucur - lo
             var cb: i64 = 0
             if nv < 0 {
@@ -566,10 +566,10 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
                 cb = 1
             }
             U[j + i4] = nv
-            borrow = (p >> 32) + as_u128(cb)
+            borrow = (p >> 32) + to_u128(cb)
             i4 = i4 + 1
         }
-        var topVal: i64 = U[j + n] - as_i64(borrow & 0xFFFFFFFFu128)
+        var topVal: i64 = U[j + n] - to_i64(borrow & 0xFFFFFFFFu128)
         var addback: i64 = 0
         if topVal < 0 {
             // 借位过头（qhat 估大 1）：加回 V 并减 1
@@ -590,7 +590,7 @@ pub func divrem(a: table<i64>, b: table<i64>) -> (table<i64>, table<i64>) {
             addback = 1
         }
         U[j + n] = topVal
-        q[j] = as_i64(qhat & 0xFFFFFFFFu128) - addback
+        q[j] = to_i64(qhat & 0xFFFFFFFFu128) - addback
         j = j - 1
     }
 

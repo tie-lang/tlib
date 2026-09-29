@@ -183,25 +183,25 @@ func spawn_timeout(cmd: string, ms: i64) -> (i32, bool) {
         var pi = zalloc(24)      // PROCESS_INFORMATION：hProcess@0 hThread@8 pid@16 tid@20
         var created = CreateProcessW(app, cl, 0, 0, 0, 0, 0, 0, si, pi)
         if created == 0 {
-            return (as_i32(-1), false)
+            return (to_i32(-1), false)
         }
         var hProc = rd_u64(pi, 0)
         var hThr = rd_u64(pi, 8)
         var pid = rd_u32(pi, 16)   // PROCESS_INFORMATION.dwProcessId（强杀用）
-        var wst = WaitForSingleObject(hProc, as_u32(ms))
+        var wst = WaitForSingleObject(hProc, to_u32(ms))
         if wst == 0x102 {        // WAIT_TIMEOUT → 强杀进程树
             // taskkill /F /T 强制结束并连子进程（/T）一起，同步等待其返回
             system("taskkill /F /T /PID " + to_string(pid))
             CloseHandle(hProc)
             CloseHandle(hThr)
-            return (as_i32(-1), true)
+            return (to_i32(-1), true)
         }
         var cbuf = zalloc(4)
         GetExitCodeProcess(hProc, cbuf)
         var xitcode = rd_u32(cbuf, 0)
         CloseHandle(hProc)
         CloseHandle(hThr)
-        return (as_i32(xitcode), false)
+        return (to_i32(xitcode), false)
     }
 }
 
@@ -237,11 +237,11 @@ unsafe fn wcstr(s: string) -> ptr<u8> {
     var p = alloc(len(b) + 2)
     var i: i64 = 0
     while i < len(b) {
-        deref_write(ptr_add(p, i), as_u8(b[i]))
+        deref_write(ptr_add(p, i), to_u8(b[i]))
         i = i + 1
     }
-    deref_write(ptr_add(p, len(b)), as_u8(0))
-    deref_write(ptr_add(p, len(b) + 1), as_u8(0))
+    deref_write(ptr_add(p, len(b)), to_u8(0))
+    deref_write(ptr_add(p, len(b) + 1), to_u8(0))
     return p
 }
 
@@ -250,7 +250,7 @@ unsafe fn zalloc(n: i64) -> ptr<u8> {
     var p = alloc(n)
     var i: i64 = 0
     while i < n {
-        deref_write(ptr_add(p, i), as_u8(0))
+        deref_write(ptr_add(p, i), to_u8(0))
         i = i + 1
     }
     return p
@@ -258,18 +258,18 @@ unsafe fn zalloc(n: i64) -> ptr<u8> {
 
 // 小端 u32 写缓冲。
 unsafe fn wr_u32(p: ptr<u8>, off: i64, v: i64) {
-    deref_write(ptr_add(p, off), as_u8(v & 0xFF))
-    deref_write(ptr_add(p, off + 1), as_u8((v >> 8) & 0xFF))
-    deref_write(ptr_add(p, off + 2), as_u8((v >> 16) & 0xFF))
-    deref_write(ptr_add(p, off + 3), as_u8((v >> 24) & 0xFF))
+    deref_write(ptr_add(p, off), to_u8(v & 0xFF))
+    deref_write(ptr_add(p, off + 1), to_u8((v >> 8) & 0xFF))
+    deref_write(ptr_add(p, off + 2), to_u8((v >> 16) & 0xFF))
+    deref_write(ptr_add(p, off + 3), to_u8((v >> 24) & 0xFF))
 }
 
 // 小端 u32 读缓冲。
 unsafe fn rd_u32(p: ptr<u8>, off: i64) -> i64 {
-    return as_i64(deref(ptr_add(p, off))) |
-        (as_i64(deref(ptr_add(p, off + 1))) << 8) |
-        (as_i64(deref(ptr_add(p, off + 2))) << 16) |
-        (as_i64(deref(ptr_add(p, off + 3))) << 24)
+    return to_i64(deref(ptr_add(p, off))) |
+        (to_i64(deref(ptr_add(p, off + 1))) << 8) |
+        (to_i64(deref(ptr_add(p, off + 2))) << 16) |
+        (to_i64(deref(ptr_add(p, off + 3))) << 24)
 }
 
 // 小端 8 字节（HANDLE/指针）读缓冲。
@@ -277,7 +277,7 @@ unsafe fn rd_u64(p: ptr<u8>, off: i64) -> i64 {
     var v: i64 = 0
     var k: i64 = 0
     while k < 8 {
-        v = v | (as_i64(deref(ptr_add(p, off + k))) << (8 * k))
+        v = v | (to_i64(deref(ptr_add(p, off + k))) << (8 * k))
         k = k + 1
     }
     return v

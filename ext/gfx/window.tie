@@ -62,21 +62,21 @@ pub func open(title: string, width: i64, height: i64) -> i64 {
                 var v = cp - 0x10000
                 var hi = 0xD800 + (v >> 10)
                 var lo = 0xDC00 + (v & 0x3FF)
-                deref_write(ptr_add(buf, o), as_u8(hi & 0xFF))
-                deref_write(ptr_add(buf, o + 1), as_u8((hi >> 8) & 0xFF))
-                deref_write(ptr_add(buf, o + 2), as_u8(lo & 0xFF))
-                deref_write(ptr_add(buf, o + 3), as_u8((lo >> 8) & 0xFF))
+                deref_write(ptr_add(buf, o), to_u8(hi & 0xFF))
+                deref_write(ptr_add(buf, o + 1), to_u8((hi >> 8) & 0xFF))
+                deref_write(ptr_add(buf, o + 2), to_u8(lo & 0xFF))
+                deref_write(ptr_add(buf, o + 3), to_u8((lo >> 8) & 0xFF))
                 o = o + 4
             } else {
-                deref_write(ptr_add(buf, o), as_u8(cp & 0xFF))
-                deref_write(ptr_add(buf, o + 1), as_u8((cp >> 8) & 0xFF))
+                deref_write(ptr_add(buf, o), to_u8(cp & 0xFF))
+                deref_write(ptr_add(buf, o + 1), to_u8((cp >> 8) & 0xFF))
                 o = o + 2
             }
             i = i + 1
         }
-        deref_write(ptr_add(buf, o), as_u8(0))
-        deref_write(ptr_add(buf, o + 1), as_u8(0))
-        var hw = win_open(buf, as_i32(total), as_i32(width), as_i32(height))
+        deref_write(ptr_add(buf, o), to_u8(0))
+        deref_write(ptr_add(buf, o + 1), to_u8(0))
+        var hw = win_open(buf, to_i32(total), to_i32(width), to_i32(height))
         free(buf)
         return hw
     }
@@ -117,7 +117,7 @@ pub func destroy(hwnd: i64) {
 
 // 兜底延时（消息泵之间）：避免忙等/死等，探针用 p0 级毫秒。
 pub func sleep(ms: i64) {
-    unsafe { Sleep(as_u32(ms)) }
+    unsafe { Sleep(to_u32(ms)) }
 }
 
 // 按类名/窗口名找顶层窗口句柄（FindWindowW）；找不到返回 0。探针校验存活。
@@ -132,25 +132,25 @@ pub func find(cls: string, title: string) -> i64 {
         var n = str_len(cls)
         while i < n {
             var cp = char_code(str_char(cls, i))
-            deref_write(ptr_add(cbuf, o), as_u8(cp & 0xFF))
-            deref_write(ptr_add(cbuf, o + 1), as_u8((cp >> 8) & 0xFF))
+            deref_write(ptr_add(cbuf, o), to_u8(cp & 0xFF))
+            deref_write(ptr_add(cbuf, o + 1), to_u8((cp >> 8) & 0xFF))
             o = o + 2
             i = i + 1
         }
-        deref_write(ptr_add(cbuf, o), as_u8(0))
-        deref_write(ptr_add(cbuf, o + 1), as_u8(0))
+        deref_write(ptr_add(cbuf, o), to_u8(0))
+        deref_write(ptr_add(cbuf, o + 1), to_u8(0))
         o = 0
         i = 0
         n = str_len(title)
         while i < n {
             var cp = char_code(str_char(title, i))
-            deref_write(ptr_add(tbuf, o), as_u8(cp & 0xFF))
-            deref_write(ptr_add(tbuf, o + 1), as_u8((cp >> 8) & 0xFF))
+            deref_write(ptr_add(tbuf, o), to_u8(cp & 0xFF))
+            deref_write(ptr_add(tbuf, o + 1), to_u8((cp >> 8) & 0xFF))
             o = o + 2
             i = i + 1
         }
-        deref_write(ptr_add(tbuf, o), as_u8(0))
-        deref_write(ptr_add(tbuf, o + 1), as_u8(0))
+        deref_write(ptr_add(tbuf, o), to_u8(0))
+        deref_write(ptr_add(tbuf, o + 1), to_u8(0))
         var hw = FindWindowW(cbuf, tbuf)
         free(cbuf)
         free(tbuf)

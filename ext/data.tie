@@ -28,23 +28,23 @@ pub func zscore(me: ref array<f32, 1024>, n: i64) {
     var m: f64 = 0.0
     var i: i64 = 0
     while i < n {
-        m = m + as_f64(me[i])
+        m = m + to_f64(me[i])
         i = i + 1
     }
-    m = m / as_f64(n)
+    m = m / to_f64(n)
     var vr: f64 = 0.0
     var j: i64 = 0
     while j < n {
-        var d = as_f64(me[j]) - m
+        var d = to_f64(me[j]) - m
         vr = vr + d * d
         j = j + 1
     }
-    vr = vr / as_f64(n)
+    vr = vr / to_f64(n)
     var s = sqrt(vr)
     var k: i64 = 0
     while k < n {
         if s > 0.0 {
-            me[k] = as_f32((as_f64(me[k]) - m) / s)
+            me[k] = to_f32((to_f64(me[k]) - m) / s)
         } else {
             me[k] = 0.0
         }
@@ -61,18 +61,18 @@ pub func zscore_stat(ma: ref array<f32, 1024>, n: i64) -> (m: f64, s: f64) {
     var m: f64 = 0.0
     var i: i64 = 0
     while i < n {
-        m = m + as_f64(ma[i])
+        m = m + to_f64(ma[i])
         i = i + 1
     }
-    m = m / as_f64(n)
+    m = m / to_f64(n)
     var vr: f64 = 0.0
     var j: i64 = 0
     while j < n {
-        var d = as_f64(ma[j]) - m
+        var d = to_f64(ma[j]) - m
         vr = vr + d * d
         j = j + 1
     }
-    vr = vr / as_f64(n)
+    vr = vr / to_f64(n)
     return (m, sqrt(vr))
 }
 
@@ -81,7 +81,7 @@ pub func zscore_stat(ma: ref array<f32, 1024>, n: i64) -> (m: f64, s: f64) {
 pub func denorm(me: ref array<f32, 1024>, n: i64, m: f64, s: f64) {
     var i: i64 = 0
     while i < n {
-        me[i] = as_f32(m + s * as_f64(me[i]))
+        me[i] = to_f32(m + s * to_f64(me[i]))
         i = i + 1
     }
 }
@@ -153,7 +153,7 @@ pub func tile_load(me: ref array<f32, 1024>, path: string) -> i64 {
     }
     var i: i64 = 0
     while i < cnt {
-        me[i] = as_f32(buf.f32_at(b, i * 4))
+        me[i] = to_f32(buf.f32_at(b, i * 4))
         i = i + 1
     }
     return cnt

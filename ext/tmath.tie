@@ -216,7 +216,7 @@ pub func mean64(xs: ref array<f64, 64>, n: i64) -> f64 {
         s = s + xs[i]
         i = i + 1
     }
-    return s / as_f64(n)
+    return s / to_f64(n)
 }
 
 // 窗口 64 总体方差：1/n·Σ(x-mean)²；n<=0 返回 0。
@@ -233,7 +233,7 @@ pub func var64(xs: ref array<f64, 64>, n: i64) -> f64 {
         acc = acc + d * d
         i = i + 1
     }
-    return acc / as_f64(n)
+    return acc / to_f64(n)
 }
 
 // 窗口 64 总体标准差：sqrt(var64)。(population std = sqrt(var64).)
@@ -287,7 +287,7 @@ pub func mean512(xs: ref array<f64, 512>, n: i64) -> f64 {
         s = s + xs[i]
         i = i + 1
     }
-    return s / as_f64(n)
+    return s / to_f64(n)
 }
 
 // 窗口 512 总体方差：1/n·Σ(x-mean)²；n<=0 返回 0。
@@ -304,7 +304,7 @@ pub func var512(xs: ref array<f64, 512>, n: i64) -> f64 {
         acc = acc + d * d
         i = i + 1
     }
-    return acc / as_f64(n)
+    return acc / to_f64(n)
 }
 
 // 窗口 512 总体标准差：sqrt(var512)。(population std = sqrt(var512).)
