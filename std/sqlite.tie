@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:ext, unsafe:mem>
 // ============================================================================
 // sqlite.tie：标准库——SQLite 驱动（命名空间 sqlite，C ABI 桥 + 动态加载） p.6.6.20
 // Windows 10+ 自带 winsqlite3.dll（System32，导出 sqlite3_* 符号），但 toolchain
