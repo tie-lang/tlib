@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:mem>
 // ============================================================================
 // ecdsa.tie：ext——ECDSA P-256 数字签名（命名空间 ecdsa，纯 BCrypt/CNG extern）
 // 用途：NIST P-256 曲线的生成/签名/验签，面向密钥/文档签名场景。

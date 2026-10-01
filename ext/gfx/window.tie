@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:mem>
 // ext/gfx/window.tie —— p.6.8.9 Win32 窗口嵌入层 tie 封装（namespace win）
 // EN: tie-side wrapper for the Win32 window-embedding layer (namespace win).
 //

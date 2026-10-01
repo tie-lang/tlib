@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:mem>
 // ext/gfx/event.tie —— p.6.8.10 事件系统 E3 tie 封装（namespace ev）
 // EN: tie-side wrapper for the E3 event queue (mouse/keyboard with pos/keycode/
 // timestamp) + signal flags (namespace ev).

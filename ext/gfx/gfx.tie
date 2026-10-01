@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:mem>
 // ext/gfx/gfx.tie —— trm.ui.gfx 句柄层（p.6.8.7）
 // EN: trm.ui.gfx handle layer: repr(C) handle structs + function forwarding + lifecycle.
 // =================================================================================

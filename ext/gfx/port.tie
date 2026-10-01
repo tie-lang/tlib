@@ -1,4 +1,4 @@
-type tie<logic>
+type tie<logic, unsafe:mem>
 // ext/gfx/port.tie —— p.6.8.11 trm.ui port 抽象面：Window / Painter / EventSource 三件套，
 // 双实现（SKIA 真实窗口 / OFFSCREEN 纯离屏）可切换，两实现共享同一命令列表渲染代码路径。
 // EN: trm.ui port surface: a Window / Painter / EventSource trio with a switchable dual

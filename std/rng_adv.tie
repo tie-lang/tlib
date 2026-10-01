@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:ext, unsafe:mem>
 // ============================================================================
 // std/rng_adv.tie —— 统一随机/密码学封装（命名空间 rng）p.9.1.1.12
 // Unified RNG wrapper. 把 std/random（rnd，底座 rand_range）与 std/csprng

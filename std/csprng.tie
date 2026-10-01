@@ -1,4 +1,4 @@
-type tie<class>
+type tie<class, unsafe:mem>
 // ============================================================================
 // csprng.tie：标准库——加密安全随机（命名空间 csrnd，Windows BCryptGenRandom）。
 // 用途：TLS 密钥材料（x25519/P-256 临时私钥）、ClientHello random、session id
