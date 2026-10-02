@@ -41,7 +41,7 @@ pub func adler32(b: table<i64>) -> i64 {
 }
 
 // CRC-32/IEEE（反射，多项式 0xEDB88320）。向量 crc32("123456789")==0xCBF43926。
-pub func crc32(b: table<i64>) -> i64 {
+pub func crc32(immut b: table<i64>) -> i64 {
     var cr: i64 = 0xFFFFFFFF
     var n = len(b)
     var i: i64 = 0
@@ -584,7 +584,7 @@ func block_stored(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
 }
 
 // 原始 DEFLATE 解压 → (ok, out)。raw 不含 zlib/gzip 头尾。
-pub func inflate(raw: table<i64>) -> (bool, table<i64>) {
+pub func inflate(immut raw: table<i64>) -> (bool, table<i64>) {
     var out = table_new_i64()
     var st = new_br()
     var bfinal: i64 = 0
@@ -748,7 +748,7 @@ func find_match(data: table<i64>, i: i64, startback: i64) -> (i64, i64) {
 }
 
 // 原始 DEFLATE 压缩（固定 Huffman，单 final 块）。输出规范合法固定块流。
-pub func deflate(data: table<i64>) -> table<i64> {
+pub func deflate(immut data: table<i64>) -> table<i64> {
     var out = table_new_i64()
     var wr = table_new_i64()
     table_push(wr, 0)

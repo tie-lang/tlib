@@ -301,7 +301,7 @@ func ecdsa_der_to_raw(cv: table<i64>) -> table<i64> {
     return out
 }
 
-func verify_ecdsa(point: table<i64>, sig: table<i64>, digest: table<i64>) -> bool {
+func verify_ecdsa(immut point: table<i64>, immut sig: table<i64>, immut digest: table<i64>) -> bool {
     if len(point) != 65 || point[0] != 0x04 || len(digest) != 32 {
         return false
     }

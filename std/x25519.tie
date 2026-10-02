@@ -149,7 +149,7 @@ func cswap(swap: i64, xa: table<i64>, za: table<i64>, xb: table<i64>, zb: table<
 }
 
 // 蒙哥马利阶梯：给定 clamp 后标量 k 与 u 坐标（域元素），得 u·G 的 u 坐标。
-func ladder(k: table<i64>, u: table<i64>) -> table<i64> {
+func ladder(immut k: table<i64>, immut u: table<i64>) -> table<i64> {
     var x1 = u
     var x2 = x_one
     var z2 = x_zero
