@@ -204,7 +204,7 @@ func der_parse_node(bs: table<i64>) -> i64 {
 // ---------- public API ----------
 
 // Parse a whole DER byte table; return root node id (>=0) or -1 on failure.
-pub func parse(bs: table<i64>) -> i64 {
+pub func parse(immut bs: table<i64>) -> i64 {
     d_tags = table_new_i64()
     d_cons = table_new_i64()
     d_offs = table_new_i64()
