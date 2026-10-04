@@ -100,12 +100,12 @@ func has_server_hello_done(s: table<i64>) -> bool {
 // handle<0 拒绝并关闭 socket（不发送 client Finished，不崩溃）。
 func finish13(s: Session, h: i64, ch_msg: table<i64>, sh_body: table<i64>, server_pub: table<i64>, sk_hex: string, host: string) -> Session {
     var transcript = tbt.concat(ch_msg, sh_body)
-    var shared = tls13.shared_secret(sk_hex, server_pub)
-    if len(shared) != 32 {
+    var shared_sec = tls13.shared_secret(sk_hex, server_pub)
+    if len(shared_sec) != 32 {
         s.handle = -1
         return s
     }
-    var hs = tls13.handshake_secret(shared)
+    var hs = tls13.handshake_secret(shared_sec)
     var cht = tls13.client_hs_traffic(hs, transcript)
     var sht = tls13.server_hs_traffic(hs, transcript)
     var (c_k, c_iv) = tls13.sched_keys(cht)
