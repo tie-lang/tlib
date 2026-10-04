@@ -315,10 +315,10 @@ pub func derive_secret(secret: table<i64>, label: string, messages: table<i64>) 
 // handshake_secret（RFC 8446 §7.1）：
 //   early_secret = Extract(0, 0)；derived = Derive-Secret(early,"derived","")；
 //   handshake_secret = Extract(salt=derived, IKM=ecdh_shared)。
-pub func handshake_secret(shared: table<i64>) -> table<i64> {
+pub func handshake_secret(ecdh: table<i64>) -> table<i64> {
     var early = thash.hkdf_extract(tbt.zeros(32), tbt.zeros(32))
     var derived = derive_secret(early, "derived", empty())
-    return thash.hkdf_extract(derived, shared)
+    return thash.hkdf_extract(derived, ecdh)
 }
 
 pub func client_hs_traffic(hs: table<i64>, transcript: table<i64>) -> table<i64> {
