@@ -224,8 +224,8 @@ pub func dh(sk_hex: string, pk_hex: string) -> string {
     }
     ub[31] = ub[31] & 0x7F           // 掩 u 最高位（RFC 7748）
     var u = scalar_bytes(ub)
-    var shared = ladder(k, u)
-    return int_le_hex(shared, 32)
+    var secret = ladder(k, u)
+    return int_le_hex(secret, 32)
 }
 
 }   // namespace x25519

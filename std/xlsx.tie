@@ -205,12 +205,12 @@ pub func xlsx_read(xb: table<i64>, sheet_name: string) -> (bool, table<table<str
         return (false, empty)
     }
     // 共享字符串池（可选）
-    var shared = shared_strings(xb)
+    var sst = shared_strings(xb)
     var d = xm.parse(sheettxt)
     if !xm.is_ok(d) {
         return (false, empty)
     }
-    var rows = rows_from_sheet(d, shared)
+    var rows = rows_from_sheet(d, sst)
     return (true, rows)
 }
 
@@ -236,25 +236,25 @@ func shared_strings(xb: table<i64>) -> table<string> {
 }
 
 // 从解析好的 sheet 文档构建行栅格（行=数组，单元格按列定位补 "" 空槽）。
-func rows_from_sheet(d: XmlDoc, shared: table<string>) -> table<table<string>> {
+func rows_from_sheet(d: XmlDoc, sst: table<string>) -> table<table<string>> {
     var rows_el = xm.query(d, "row")
     var n = len(rows_el)
     var empty: table<table<string>> = []
     if n == 0 {
         return empty
     }
-    var r0 = build_row(d, rows_el[0], shared)
+    var r0 = build_row(d, rows_el[0], sst)
     var rows: table<table<string>> = [r0]
     var i: i64 = 1
     while i < n {
-        table_push(rows, build_row(d, rows_el[i], shared))
+        table_push(rows, build_row(d, rows_el[i], sst))
         i = i + 1
     }
     return rows
 }
 
 // 建一行：cells 按 <c r="A1"> 的列字母放置到数组，空槽补 ""，尾随空删除。
-func build_row(d: XmlDoc, rowel: i64, shared: table<string>) -> table<string> {
+func build_row(d: XmlDoc, rowel: i64, sst: table<string>) -> table<string> {
     var cells = table_new_string()
     var kids = xm.children(d, rowel)
     var kn = len(kids)
@@ -269,8 +269,8 @@ func build_row(d: XmlDoc, rowel: i64, shared: table<string>) -> table<string> {
             var val = cell_value(d, c)
             if typ == "s" {
                 var sindex = parse_int(val)
-                if sindex >= 0 && sindex < len(shared) {
-                    val = shared[sindex]
+                if sindex >= 0 && sindex < len(sst) {
+                    val = sst[sindex]
                 } else {
                     val = ""
                 }
