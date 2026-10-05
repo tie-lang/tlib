@@ -100,7 +100,7 @@ func b2s(b: table<i64>) -> string {
 }
 
 // 字符串按字节追加进字节表（str_byte 按字节索引，ASCII 段 = 码点）。
-func append_str(t: table<i64>, s: string) {
+func append_str(ref t: table<i64>, s: string) {
     var n: i64 = len(s)
     var i: i64 = 0
     while i < n {
@@ -686,7 +686,7 @@ func parse_response(b: table<i64>, furl: string) -> Response {
 }
 
 // 明文读满响应（Connection: close；CL/chunked 提前判定完成）。
-func drain_plain(h: i64, buf: table<i64>) -> string {
+func drain_plain(h: i64, ref buf: table<i64>) -> string {
     var he: i64 = -1
     var parsed = false
     var clen: i64 = -1
@@ -729,7 +729,7 @@ func drain_plain(h: i64, buf: table<i64>) -> string {
 }
 
 // TLS 读满响应（与 drain_plain 同构；tie 无函数指针/统一句柄，故双入口）。
-func drain_tls(s: Session, buf: table<i64>) -> string {
+func drain_tls(s: Session, ref buf: table<i64>) -> string {
     var he: i64 = -1
     var parsed = false
     var clen: i64 = -1

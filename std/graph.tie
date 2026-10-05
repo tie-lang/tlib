@@ -178,7 +178,7 @@ pub func bellman_ford(adj: table<i64>, n: i64, src: i64) -> table<i64> {
 
 // 最大流（Ford-Fulkerson，BFS 增广）：返回最大流量（i64）。
 // cap：n×n 容量矩阵展平 table<i64>；s：源点；t：汇点。
-pub func max_flow(cap: table<i64>, n: i64, s: i64, t: i64) -> i64 {
+pub func max_flow(ref cap: table<i64>, n: i64, s: i64, t: i64) -> i64 {
     // 复制到局部表（增广更新就地修改，不写回调用方实参）
     var copy = table_new_i64()
     var ii: i64 = 0

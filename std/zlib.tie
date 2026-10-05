@@ -66,7 +66,7 @@ pub func crc32(immut b: table<i64>) -> i64 {
 // ============================================================================
 
 // 读 n 位（LSB-first）；输入越界返回 -1（错误哨兵，合法值 ≥0）。
-func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
+func read_bits(ref st: table<i64>, raw: table<i64>, n: i64) -> i64 {
     while st[1] < n {
         if st[2] >= len(raw) {
             return -1
@@ -90,7 +90,7 @@ func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
 }
 
 // 存储块前字节对齐：丢弃当前字节剩余位。
-func byte_align(st: table<i64>) {
+func byte_align(ref st: table<i64>) {
     st[0] = 0
     st[1] = 0
 }
@@ -148,7 +148,7 @@ func build_tables(length: table<i64>, n: i64) -> (table<i64>, table<i64>, i64) {
 }
 
 // 解码一个符号：逐位推进规范码，命中即返回符号；越界/无效返回 -1（同 puff.c）。
-func hdec(st: table<i64>, raw: table<i64>, symbol: table<i64>,
+func hdec(ref st: table<i64>, raw: table<i64>, symbol: table<i64>,
           count: table<i64>, maxbits: i64) -> i64 {
     var cd: i64 = 0
     var first: i64 = 0
@@ -377,7 +377,7 @@ func dist_extra_tab() -> table<i64> {
 // ============================================================================
 
 // 字面/长度-距离 LZ 循环直到 sym 256。返回 false = 位流越界/非法/输出越限。
-func run_lz(st: table<i64>, raw: table<i64>, out: table<i64>,
+func run_lz(ref st: table<i64>, raw: table<i64>, ref out: table<i64>,
             syms: table<i64>, cnts: table<i64>, litmb: i64,
             dsyms: table<i64>, dcnts: table<i64>, dmb: i64) -> bool {
     var lb = len_base_tab()
@@ -441,7 +441,7 @@ func run_lz(st: table<i64>, raw: table<i64>, out: table<i64>,
 }
 
 // 动态块：读码长序列并解析出 lit/dist 码长表，再跑 LZ。
-func block_dynamic(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_dynamic(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     var hlit = read_bits(st, raw, 5) + 257
     var hdist = read_bits(st, raw, 5) + 1
     var hclen = read_bits(st, raw, 4) + 4
@@ -553,14 +553,14 @@ func block_dynamic(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
 }
 
 // 固定块：直接内置长度表跑 LZ。
-func block_fixed(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_fixed(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     var rl = build_tables(fixed_len_tab(), 288)
     var rd = build_tables(fixed_dist_tab(), 32)
     return run_lz(st, raw, out, rl.0, rl.1, rl.2, rd.0, rd.1, rd.2)
 }
 
 // 存储块：字节对齐读 LEN/NLEN 校验补码，直接拷贝 len 字节。
-func block_stored(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_stored(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     byte_align(st)
     var pos = st[2]
     if pos + 4 > len(raw) {
@@ -620,7 +620,7 @@ pub func inflate(immut raw: table<i64>) -> (bool, table<i64>) {
 // ============================================================================
 
 // 位写入器状态：wr=[0]acc,[1]accbits，字节追加到 out。LSB-first。
-func put_bits(wr: table<i64>, out: table<i64>, c: i64, n: i64) {
+func put_bits(ref wr: table<i64>, ref out: table<i64>, c: i64, n: i64) {
     wr[0] = wr[0] | (c << wr[1])
     wr[1] = wr[1] + n
     while wr[1] >= 8 {
@@ -632,7 +632,7 @@ func put_bits(wr: table<i64>, out: table<i64>, c: i64, n: i64) {
 
 // 写一条 Huffman 码（码长 L，码值 cval）——规范码以 MSB-first 落入位流：
 // 反转 cval 的低 L 位后按 LSB 写出（解码端 read_bits 先读到的位即码 MSB）。
-func emit_code(wr: table<i64>, out: table<i64>, cval: i64, L: i64) {
+func emit_code(ref wr: table<i64>, ref out: table<i64>, cval: i64, L: i64) {
     var r: i64 = 0
     var k: i64 = 0
     while k < L {

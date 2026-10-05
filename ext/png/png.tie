@@ -107,7 +107,7 @@ func be_bytes32(v: i64) -> table<i64> {
 // 状态表 st：[0]=bitbuf 累加器, [1]=bitcnt 有效位数, [2]=pos 下一未读字节下标。
 // read_bits 当位不足且输入越界时返回 -1（错误哨兵；合法结果恒 ≥0）。
 
-func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
+func read_bits(ref st: table<i64>, raw: table<i64>, n: i64) -> i64 {
     while st[1] < n {
         if st[2] >= len(raw) {
             return -1
@@ -131,7 +131,7 @@ func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
 }
 
 // 存储块前的字节对齐：丢弃当前字节剩余位。
-func byte_align(st: table<i64>) {
+func byte_align(ref st: table<i64>) {
     st[0] = 0
     st[1] = 0
 }
@@ -193,7 +193,7 @@ func build_tables(length: table<i64>, n: i64) -> (table<i64>, table<i64>, i64) {
 // 解码一个符号：逐位推进规范码，命中即返回符号；越界/无效返回 -1。
 // 算法同 zlib puff.c decode()：code 累积接收位（LSB-first，末尾左移进位即
 // MSB-first 规范序），first/count/index 二分码字空间。
-func hdec(st: table<i64>, raw: table<i64>, symbol: table<i64>,
+func hdec(ref st: table<i64>, raw: table<i64>, symbol: table<i64>,
           count: table<i64>, maxbits: i64) -> i64 {
     var cd: i64 = 0
     var first: i64 = 0
@@ -419,7 +419,7 @@ func cl_order() -> table<i64> {
 
 // 运行一个字面/长度-距离 LZ 循环直到本块结束（sym 256）。字面树 (syms,cnts,
 // litmb) 与距离树 (dsyms,dcnts,dmb) 各为代表。返回 false = 位流越界/非法。
-func run_lz(st: table<i64>, raw: table<i64>, out: table<i64>,
+func run_lz(ref st: table<i64>, raw: table<i64>, ref out: table<i64>,
             syms: table<i64>, cnts: table<i64>, litmb: i64,
             dsyms: table<i64>, dcnts: table<i64>, dmb: i64) -> bool {
     var lb = len_base_t()
@@ -483,7 +483,7 @@ func run_lz(st: table<i64>, raw: table<i64>, out: table<i64>,
 }
 
 // 动态块：读码长序列并解析出 lit/dist 码长表，再跑 LZ。
-func block_dynamic(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_dynamic(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     var hlit = read_bits(st, raw, 5) + 257
     var hdist = read_bits(st, raw, 5) + 1
     var hclen = read_bits(st, raw, 4) + 4
@@ -598,7 +598,7 @@ func block_dynamic(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
 }
 
 // 固定块：直接用内置长度表跑 LZ。
-func block_fixed(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_fixed(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     var ll = fixed_lit_len()
     var dl = fixed_dist_len()
     var rl = build_tables(ll, 288)
@@ -613,7 +613,7 @@ func block_fixed(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
 }
 
 // 存储块：字节对齐读 LEN/NLEN，校验补码，直接拷贝 len 字节。
-func block_stored(st: table<i64>, raw: table<i64>, out: table<i64>) -> bool {
+func block_stored(ref st: table<i64>, raw: table<i64>, ref out: table<i64>) -> bool {
     byte_align(st)
     var pos = st[2]
     if pos + 4 > len(raw) {
@@ -971,7 +971,7 @@ pub func decode(bytes: table<i64>) -> PngImage {
 // ============================================================================
 
 // 追加 u32 BE 4 字节到 buf。
-func push_u32be(buf: table<i64>, v: i64) {
+func push_u32be(ref buf: table<i64>, v: i64) {
     table_push(buf, (v >> 24) & 0xFF)
     table_push(buf, (v >> 16) & 0xFF)
     table_push(buf, (v >> 8) & 0xFF)
@@ -979,7 +979,7 @@ func push_u32be(buf: table<i64>, v: i64) {
 }
 
 // 追加若干字节到 buf。
-func push_bytes(buf: table<i64>, src: table<i64>, off: i64, n: i64) {
+func push_bytes(ref buf: table<i64>, src: table<i64>, off: i64, n: i64) {
     var i: i64 = 0
     while i < n {
         table_push(buf, src[off + i])
@@ -988,7 +988,7 @@ func push_bytes(buf: table<i64>, src: table<i64>, off: i64, n: i64) {
 }
 
 // 追加字符串（ASCII 段）字节到 buf。
-func push_str(buf: table<i64>, s: string) {
+func push_str(ref buf: table<i64>, s: string) {
     var n = str_len(s)
     var i: i64 = 0
     while i < n {

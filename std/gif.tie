@@ -44,7 +44,7 @@ func le16(b: table<i64>, off: i64) -> i64 {
 }
 
 // 追加小端 u16。
-func push_le16(buf: table<i64>, v: i64) {
+func push_le16(ref buf: table<i64>, v: i64) {
     table_push(buf, v & 0xFFFF)
     table_push(buf, (v >> 8) & 0xFFFF)
 }
@@ -54,7 +54,7 @@ func push_le16(buf: table<i64>, v: i64) {
 // ============================================================================
 
 // 位读取器：st=[0]bitbuf,[1]bitcnt,[2]pos。读 n 位 LSB-first；越界返回 -1。
-func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
+func read_bits(ref st: table<i64>, raw: table<i64>, n: i64) -> i64 {
     while st[1] < n {
         if st[2] >= len(raw) {
             return -1
@@ -287,7 +287,7 @@ func interlace_pixels(ind: table<i64>, w: i64, h: i64) -> table<i64> {
 // ============================================================================
 
 // 位写入器：wr=[0]acc,[1]cnt；把 LSB-first 的 L 位写入 out 字节表。
-func put_bits(wr: table<i64>, out: table<i64>, c: i64, n: i64) {
+func put_bits(ref wr: table<i64>, ref out: table<i64>, c: i64, n: i64) {
     wr[0] = wr[0] | (c << wr[1])
     wr[1] = wr[1] + n
     while wr[1] >= 8 {
@@ -365,7 +365,7 @@ func lzw_encode(data: table<i64>, min_cs: i64) -> table<i64> {
 }
 
 // 线性探测哈希：key=w*256+c → code；-1 表示不在字典。tblk 存 key、tblv 存码。
-func dict_put(tblk: table<i64>, tblv: table<i64>, w: i64, c: i64, cd: i64) {
+func dict_put(ref tblk: table<i64>, ref tblv: table<i64>, w: i64, c: i64, cd: i64) {
     var key = w * 256 + c
     var idx = (key * 2654435761) % 16384
     if idx < 0 {
@@ -748,7 +748,7 @@ pub func encode(rgb: table<i64>, w: i64, h: i64, palette: table<i64>) -> table<i
 }
 
 // 追加 ASCII 字符串字节。
-func push_str(buf: table<i64>, s: string) {
+func push_str(ref buf: table<i64>, s: string) {
     var n = str_len(s)
     var i: i64 = 0
     while i < n {

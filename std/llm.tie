@@ -373,7 +373,7 @@ pub func complete(model: string, api_key: string, messages: table<string>,
 // 作为「httpc 已封装传输」的便捷封装供按需使用，验收不依赖此路径。
 
 // 字符串按字节追加进字节表（请求体转字节）。
-func append_body_bytes(t: table<i64>, s: string) {
+func append_body_bytes(ref t: table<i64>, s: string) {
     var n = str_len(s)
     var i: i64 = 0
     while i < n {

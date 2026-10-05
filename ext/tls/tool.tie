@@ -87,7 +87,7 @@ pub func concat(a: table<i64>, b: table<i64>) -> table<i64> {
 }
 
 // 追加 src[off .. off+n) 到 out 尾部。
-pub func push_bytes(out: table<i64>, src: table<i64>, off: i64, n: i64) {
+pub func push_bytes(ref out: table<i64>, src: table<i64>, off: i64, n: i64) {
     var i: i64 = 0
     while i < n {
         table_push(out, src[off + i])
@@ -175,7 +175,7 @@ pub func u64_be(b: table<i64>, off: i64) -> i64 {
 // ---- 大端序写入 ----
 
 // 高位优先压入 v 的低 n 字节到 out 尾部（n=1..8）。
-pub func push_be(out: table<i64>, v: i64, n: i64) {
+pub func push_be(ref out: table<i64>, v: i64, n: i64) {
     var i: i64 = n
     while i > 0 {
         var shift = (i - 1) * 8
@@ -184,19 +184,19 @@ pub func push_be(out: table<i64>, v: i64, n: i64) {
     }
 }
 
-pub func push_u16(out: table<i64>, v: i64) {
+pub func push_u16(ref out: table<i64>, v: i64) {
     push_be(out, v, 2)
 }
 
-pub func push_u24(out: table<i64>, v: i64) {
+pub func push_u24(ref out: table<i64>, v: i64) {
     push_be(out, v, 3)
 }
 
-pub func push_u32(out: table<i64>, v: i64) {
+pub func push_u32(ref out: table<i64>, v: i64) {
     push_be(out, v, 4)
 }
 
-pub func push_u64(out: table<i64>, v: i64) {
+pub func push_u64(ref out: table<i64>, v: i64) {
     push_be(out, v, 8)
 }
 

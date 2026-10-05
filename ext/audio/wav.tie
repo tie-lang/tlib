@@ -42,17 +42,17 @@ func le32(b: table<i64>, off: i64) -> i64 {
 func is4(b: table<i64>, off: i64, c0: i64, c1: i64, c2: i64, c3: i64) -> bool {
     return b[off] == c0 && b[off + 1] == c1 && b[off + 2] == c2 && b[off + 3] == c3
 }
-func push_le16(buf: table<i64>, v: i64) {
+func push_le16(ref buf: table<i64>, v: i64) {
     table_push(buf, v & 0xFF)
     table_push(buf, (v >> 8) & 0xFF)
 }
-func push_le32(buf: table<i64>, v: i64) {
+func push_le32(ref buf: table<i64>, v: i64) {
     table_push(buf, v & 0xFF)
     table_push(buf, (v >> 8) & 0xFF)
     table_push(buf, (v >> 16) & 0xFF)
     table_push(buf, (v >> 24) & 0xFF)
 }
-func push_str(buf: table<i64>, s: string) {
+func push_str(ref buf: table<i64>, s: string) {
     var n = str_len(s)
     var i: i64 = 0
     while i < n {
@@ -317,7 +317,7 @@ pub func read_raw(w: Wav, i: i64) -> i64 {
 // ============================================================================
 // 三、encode：PCM / float32
 // ============================================================================
-func push_fmt(buf: table<i64>, fmt: i64, channels: i64, rate: i64, bps: i64, ba: i64, bits: i64) {
+func push_fmt(ref buf: table<i64>, fmt: i64, channels: i64, rate: i64, bps: i64, ba: i64, bits: i64) {
     push_str(buf, "fmt ")
     push_le32(buf, 16)
     push_le16(buf, fmt)

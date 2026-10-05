@@ -71,7 +71,7 @@ func grad_band(theme: i64, i: i64, n: i64) -> u32 {
 }
 
 // ---- 8x8 洋红 RGBA 合法 PNG（p.6.8.8 同款，QI 内联字节表 → IMAGE 命令）----
-func push_png(ib: table<i64>) {
+func push_png(ref ib: table<i64>) {
     table_push(ib, 137); table_push(ib, 80); table_push(ib, 78); table_push(ib, 71)
     table_push(ib, 13); table_push(ib, 10); table_push(ib, 26); table_push(ib, 10)
     table_push(ib, 0); table_push(ib, 0); table_push(ib, 0); table_push(ib, 13)
@@ -95,7 +95,7 @@ func push_png(ib: table<i64>) {
 }
 
 // 平面区域表追加一格 {x,y,w,h}
-func push_spec(t: table<i64>, w: i64, h: i64) {
+func push_spec(ref t: table<i64>, w: i64, h: i64) {
     table_push(t, 0)
     table_push(t, 0)
     table_push(t, w)

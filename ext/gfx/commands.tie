@@ -29,12 +29,12 @@ namespace commands {
         return table_new_i64()
     }
     // 0 CLEAR：整面清色。
-    pub func cmd_clear(cmds: table<i64>, color: u32) {
+    pub func cmd_clear(ref cmds: table<i64>, color: u32) {
         table_push(cmds, 0)
         table_push(cmds, to_i64(color))
     }
     // 1 FILL_RECT：实填充矩形（aa 0/1）。
-    pub func cmd_fill_rect(cmds: table<i64>, l: f64, t: f64, r: f64, b: f64,
+    pub func cmd_fill_rect(ref cmds: table<i64>, l: f64, t: f64, r: f64, b: f64,
                            color: u32, aa: i64) {
         table_push(cmds, 1)
         table_push(cmds, bitcast_f64_i64(l))
@@ -45,7 +45,7 @@ namespace commands {
         table_push(cmds, aa)
     }
     // 2 STROKE_RECT：描边矩形（width 线宽 f64）。
-    pub func cmd_stroke_rect(cmds: table<i64>, l: f64, t: f64, r: f64, b: f64,
+    pub func cmd_stroke_rect(ref cmds: table<i64>, l: f64, t: f64, r: f64, b: f64,
                              color: u32, width: f64) {
         table_push(cmds, 2)
         table_push(cmds, bitcast_f64_i64(l))
@@ -56,7 +56,7 @@ namespace commands {
         table_push(cmds, bitcast_f64_i64(width))
     }
     // 3 TEXT：文本绘制。s 逐字符写 UTF-8 字节值（ASCII 即码点；多字节 UTF-8 亦逐字节）。
-    pub func cmd_text(cmds: table<i64>, size: f64, x: f64, y: f64, color: u32,
+    pub func cmd_text(ref cmds: table<i64>, size: f64, x: f64, y: f64, color: u32,
                       s: string) {
         var nc: i64 = str_len(s)
         table_push(cmds, 3)
@@ -73,7 +73,7 @@ namespace commands {
     }
     // 4 PATH：折线/闭合路径。pts 为成对坐标 f64 表（x0,y0,x1,y1..），情 moveTo 起、其余
     // lineTo；closed=1 时 close 闭合。style 0fill/1stroke。
-    pub func cmd_path(cmds: table<i64>, color: u32, style: i32, aa: i64,
+    pub func cmd_path(ref cmds: table<i64>, color: u32, style: i32, aa: i64,
                       width: f64, closed: i64, pts: table<f64>) {
         var nvals = len(pts)
         var npts: i64 = nvals / 2
@@ -91,7 +91,7 @@ namespace commands {
         }
     }
     // 5 IMAGE：把编码 PNG 字节表（i64 值，每字节一个槽）解码并绘制。x/y 为左上角。
-    pub func cmd_image(cmds: table<i64>, x: f64, y: f64, bytes: table<i64>) {
+    pub func cmd_image(ref cmds: table<i64>, x: f64, y: f64, bytes: table<i64>) {
         var nb = len(bytes)
         table_push(cmds, 5)
         table_push(cmds, bitcast_f64_i64(x))

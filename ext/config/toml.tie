@@ -105,7 +105,7 @@ pub func last_err() -> string {
 // ---------- 内部工具 ----------
 
 // 表头解析：返回新当前前缀 + 是否合法。cur 由调用方赋回（返回元组实现）。
-func parse_header(hd: string, arrc: table<string>) -> (string, bool) {
+func parse_header(hd: string, ref arrc: table<string>) -> (string, bool) {
     var n = str_len(hd)
     var isarr = false
     if str_char(hd, 0) == "[" && n >= 2 && str_char(hd, 1) == "[" {
@@ -135,7 +135,7 @@ func parse_header(hd: string, arrc: table<string>) -> (string, bool) {
 }
 
 // 值解析分发：按首字符判定 内联表/数组/字符串/裸标量。出错返回 false（已 set_err）。
-func parse_value(out: table<string>, key: string, rhs: string) -> bool {
+func parse_value(ref out: table<string>, key: string, rhs: string) -> bool {
     var n = str_len(rhs)
     if n == 0 {
         return true
@@ -323,7 +323,7 @@ func acnt_get(t: table<string>, key: string) -> i64 {
 }
 
 // 交错表对 key 的覆写/追加（数组表计数写入）。
-func acnt_put(t: table<string>, key: string, v: i64) {
+func acnt_put(ref t: table<string>, key: string, v: i64) {
     var n = len(t)
     var i: i64 = 0
     while i < n {
@@ -338,7 +338,7 @@ func acnt_put(t: table<string>, key: string, v: i64) {
 }
 
 // 交错表 push 一对：先键后值。
-func emit(out: table<string>, key: string, val: string) {
+func emit(ref out: table<string>, key: string, val: string) {
     table_push(out, key)
     table_push(out, val)
 }

@@ -332,7 +332,7 @@ namespace httpsrv {
     }
 
     // pattern 是否匹配 path；命中的 ':param' 段值追加进 params（按出现顺序）。
-    func match_pattern(pattern: string, path: string, params: table<string>) -> bool {
+    func match_pattern(pattern: string, path: string, ref params: table<string>) -> bool {
         var psegs = str.split(pattern, "/")
         var gsegs = str.split(path, "/")
         var pi: i64 = 0
