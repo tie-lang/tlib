@@ -54,7 +54,7 @@ func new_br() -> table<i64> {           // st=[0]bitbuf [1]bitcnt [2]pos
     return t
 }
 
-func read_bits(st: table<i64>, raw: table<i64>, n: i64) -> i64 {
+func read_bits(ref st: table<i64>, raw: table<i64>, n: i64) -> i64 {
     while st[1] < n {
         if st[2] >= len(raw) {
             return -1
@@ -86,7 +86,7 @@ func bw_init() -> table<i64> {          // wst=[0]未满字节位 [1]计数
     return t
 }
 
-func bw_put(out: table<i64>, wst: table<i64>, val: i64, n: i64) {
+func bw_put(ref out: table<i64>, ref wst: table<i64>, val: i64, n: i64) {
     wst[0] = wst[0] | (val << wst[1])
     wst[1] = wst[1] + n
     while wst[1] >= 8 {
@@ -97,7 +97,7 @@ func bw_put(out: table<i64>, wst: table<i64>, val: i64, n: i64) {
 }
 
 // 写 canonical 码（MSB-first 物理序，与 hdec 读取方向一致）。
-func bw_code(out: table<i64>, wst: table<i64>, cb: i64, length: i64) {
+func bw_code(ref out: table<i64>, ref wst: table<i64>, cb: i64, length: i64) {
     var i = length - 1
     while i >= 0 {
         bw_put(out, wst, (cb >> i) & 1, 1)
@@ -105,7 +105,7 @@ func bw_code(out: table<i64>, wst: table<i64>, cb: i64, length: i64) {
     }
 }
 
-func bw_flush(out: table<i64>, wst: table<i64>) {
+func bw_flush(ref out: table<i64>, ref wst: table<i64>) {
     if wst[1] > 0 {
         table_push(out, wst[0] & 0xFF)
         wst[1] = 0
@@ -155,7 +155,7 @@ func build_tables(length: table<i64>, n: i64) -> (table<i64>, table<i64>, i64) {
 }
 
 // 解码一符号（puff 算法，同 ext/png.hdec）。越界/无效返回 -1。
-func hdec(st: table<i64>, raw: table<i64>, symbol: table<i64>,
+func hdec(ref st: table<i64>, raw: table<i64>, symbol: table<i64>,
           count: table<i64>, maxbits: i64) -> i64 {
     var cd: i64 = 0
     var first: i64 = 0
@@ -283,7 +283,7 @@ func find_vp8l(bytes: table<i64>) -> (i64, i64, table<i64>) {
 
 // 读 VP8L 头（40 位：sig8 + wm114 + hm114 + alpha1 + ver3）。
 // 返回 (w, h, alpha_used)；头非法时 w<0 且 err 非空。
-func parse_vp8lh(st: table<i64>, data: table<i64>) -> (i64, i64, i64, string) {
+func parse_vp8lh(ref st: table<i64>, data: table<i64>) -> (i64, i64, i64, string) {
     var sig = read_bits(st, data, 8)
     if sig != 0x2F {
         return (-1, -1, -1, "bad VP8L signature")
@@ -302,7 +302,7 @@ func parse_vp8lh(st: table<i64>, data: table<i64>) -> (i64, i64, i64, string) {
 }
 
 // 读一棵 Huffman 树的码长（count 个，经码长码树），返回其 length[]。
-func read_codelens(st: table<i64>, raw: table<i64>, clsym: table<i64>,
+func read_codelens(ref st: table<i64>, raw: table<i64>, clsym: table<i64>,
                    clcnt: table<i64>, clmb: i64, symbol_count: i64) -> table<i64> {
     var length = table_new_i64()
     var i: i64 = 0
@@ -472,14 +472,14 @@ pub func get_info(bytes: table<i64>) -> WebPImage {
 // ============================================================================
 // 五、编码：RGBA → VP8L 无损子集 + RIFF/WEBP 容器
 // ============================================================================
-func push_u32le(buf: table<i64>, v: i64) {
+func push_u32le(ref buf: table<i64>, v: i64) {
     table_push(buf, v & 0xFF)
     table_push(buf, (v >> 8) & 0xFF)
     table_push(buf, (v >> 16) & 0xFF)
     table_push(buf, (v >> 24) & 0xFF)
 }
 
-func push_str(buf: table<i64>, s: string) {
+func push_str(ref buf: table<i64>, s: string) {
     var n = str_len(s)
     var i: i64 = 0
     while i < n {
@@ -520,7 +520,7 @@ func tree_lengths() -> (table<i64>, table<i64>, table<i64>, table<i64>, table<i6
 }
 
 // 编码一棵树码长：逐一用码长码树书写（值 ∈{0,8,9}）。
-func enc_codelens(out: table<i64>, wst: table<i64>,
+func enc_codelens(ref out: table<i64>, ref wst: table<i64>,
                   codes: table<i64>, cl_lens: table<i64>, length: table<i64>) {
     var i: i64 = 0
     while i < len(length) {

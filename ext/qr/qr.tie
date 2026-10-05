@@ -188,7 +188,7 @@ func bb_used(bs: table<i64>) -> i64 {
 }
 
 // 追加低 n 位（n∈1..16）。移位计数恒 ≤15（< i64 位宽），无需掩码。
-func bb_put(bs: table<i64>, v: i64, n: i64) {
+func bb_put(ref bs: table<i64>, v: i64, n: i64) {
     var mask: i64 = 1
     var k: i64 = 0
     while k < n {
@@ -207,7 +207,7 @@ func bb_put(bs: table<i64>, v: i64, n: i64) {
 }
 
 // 剩余不足 1 字节的位左对齐补零落盘。
-func bb_flush(bs: table<i64>) {
+func bb_flush(ref bs: table<i64>) {
     if bs[1] > 0 {
         var sh = 8 - bs[1]
         table_push(bs, (bs[0] << sh) & 0xFF)
@@ -481,16 +481,16 @@ func table_copy(src: table<i64>) -> table<i64> {
     return t
 }
 
-func set_mod(mods: table<i64>, size: i64, r: i64, c: i64, v: i64) {
+func set_mod(ref mods: table<i64>, size: i64, r: i64, c: i64, v: i64) {
     mods[r * size + c] = v
 }
 
-func mark_f(fm: table<i64>, size: i64, r: i64, c: i64) {
+func mark_f(ref fm: table<i64>, size: i64, r: i64, c: i64) {
     fm[r * size + c] = 1
 }
 
 // 画一个 finder（7×7）+ separator（8×8 功能区）。r0,c0 为 finder 左上角。
-func draw_finder(mods: table<i64>, fm: table<i64>, size: i64, r0: i64, c0: i64) {
+func draw_finder(ref mods: table<i64>, ref fm: table<i64>, size: i64, r0: i64, c0: i64) {
     var dr: i64 = -1
     while dr < 8 {
         var dc: i64 = -1
@@ -522,7 +522,7 @@ func draw_finder(mods: table<i64>, fm: table<i64>, size: i64, r0: i64, c0: i64) 
 }
 
 // 画一个 alignment（5×5，中心 (r,c)）：外环+中心暗，其余亮。
-func draw_align(mods: table<i64>, fm: table<i64>, size: i64, r: i64, c: i64) {
+func draw_align(ref mods: table<i64>, ref fm: table<i64>, size: i64, r: i64, c: i64) {
     var dr: i64 = -2
     while dr <= 2 {
         var dc: i64 = -2
@@ -540,7 +540,7 @@ func draw_align(mods: table<i64>, fm: table<i64>, size: i64, r: i64, c: i64) {
 }
 
 // 铺设全部功能图形并标记功能模块（finder/separator/timing/alignment/format 区）。
-func setup_function_patterns(mods: table<i64>, fm: table<i64>, size: i64, version: i64) {
+func setup_function_patterns(ref mods: table<i64>, ref fm: table<i64>, size: i64, version: i64) {
     draw_finder(mods, fm, size, 0, 0)
     draw_finder(mods, fm, size, 0, size - 7)
     draw_finder(mods, fm, size, size - 7, 0)
@@ -617,7 +617,7 @@ func setup_function_patterns(mods: table<i64>, fm: table<i64>, size: i64, versio
 }
 
 // 数据（含纠错码字）按之字形放置到非功能模块。v1/v2 无余位（剩余位=0）。
-func place_data(mods: table<i64>, fm: table<i64>, size: i64, data: table<i64>) {
+func place_data(ref mods: table<i64>, fm: table<i64>, size: i64, data: table<i64>) {
     var total_bits = len(data) * 8
     var bit_index: i64 = 0
     var inc: i64 = -1
@@ -680,7 +680,7 @@ func mask_on(mid: i64, r: i64, c: i64) -> bool {
 }
 
 // 对非功能模块应用掩码（XOR 翻转）。
-func apply_mask(mods: table<i64>, fm: table<i64>, size: i64, mid: i64) {
+func apply_mask(ref mods: table<i64>, fm: table<i64>, size: i64, mid: i64) {
     var r: i64 = 0
     while r < size {
         var c: i64 = 0
@@ -893,7 +893,7 @@ func spec_ecl(ecl: i64) -> i64 {
 }
 
 // 双份放置 15 位格式信息 + 暗模块（位 i 的 LSB 序与 qrcode 库一致）。
-func draw_format(mods: table<i64>, size: i64, fi: i64) {
+func draw_format(ref mods: table<i64>, size: i64, fi: i64) {
     var i: i64 = 0
     while i < 15 {
         var bit = (fi >> i) & 1

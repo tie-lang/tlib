@@ -102,7 +102,7 @@ func poly_eval(p: table<i64>, x: i64) -> i64 {
 }
 
 // 码字流 → 伴随式 S[i] = R(α^i), i=0..t-1。全零返回 0。
-func syndromes(r: table<i64>, n: i64, t: i64, out: table<i64>) -> i64 {
+func syndromes(r: table<i64>, n: i64, t: i64, ref out: table<i64>) -> i64 {
     var allzero: i64 = 1
     var i: i64 = 0
     while i < t {
@@ -129,7 +129,7 @@ func syndromes(r: table<i64>, n: i64, t: i64, out: table<i64>) -> i64 {
 
 // Berlekamp-Massey：伴随式 s[]（长度 t）→ 错误位置多项式 Λ[]。
 // 返回 0 成功 / 1 失败（不可纠：deg > t/2）。cat 为输出容器（长度 t+2，全 0）。
-func berlekamp(s: table<i64>, t: i64, cat: table<i64>) -> i64 {
+func berlekamp(s: table<i64>, t: i64, ref cat: table<i64>) -> i64 {
     var cap = t + 2
     var C = table_new_i64()
     var B = table_new_i64()
@@ -213,7 +213,7 @@ func berlekamp(s: table<i64>, t: i64, cat: table<i64>) -> i64 {
 }
 
 // 错误估值多项式 Ω = S(x)*Λ(x) mod x^t。输出长度 t。
-func omega_poly(s: table<i64>, lam: table<i64>, t: i64, out: table<i64>) {
+func omega_poly(s: table<i64>, lam: table<i64>, t: i64, ref out: table<i64>) {
     var k: i64 = 0
     while k < t {
         var acc: i64 = 0
@@ -230,7 +230,7 @@ func omega_poly(s: table<i64>, lam: table<i64>, t: i64, out: table<i64>) {
 }
 
 // 对完整码字 r（n=cw 长度）做 Chien+Forney 纠错。返回 1 成功 / 0 失败。
-func chien_forney(r: table<i64>, n: i64, lam: table<i64>, omg: table<i64>, t: i64) -> i64 {
+func chien_forney(ref r: table<i64>, n: i64, lam: table<i64>, omg: table<i64>, t: i64) -> i64 {
     var deg: i64 = 0
     var i: i64 = 0
     while i < t + 2 {
@@ -375,7 +375,7 @@ func mask_on(mid: i64, r: i64, c: i64) -> bool {
 }
 
 // 功能模块表构建（复现生成端 setup_function_patterns）。
-func build_fm(size: i64, version: i64, fm: table<i64>) {
+func build_fm(size: i64, version: i64, ref fm: table<i64>) {
     var i: i64 = 0
     while i < size * size {
         fm[i] = 0
@@ -507,7 +507,7 @@ func format_bits(data5: i64) -> i64 {
 }
 
 // 读格式信息第一份（draw_format 的列 8 排布）15 位 → 最近候选 data5（ecl2|mask3）。
-func read_format(matrix: table<i64>, size: i64, ecl: table<i64>, mask: table<i64>) -> i64 {
+func read_format(matrix: table<i64>, size: i64, ref ecl: table<i64>, ref mask: table<i64>) -> i64 {
     // 复制 draw_format 的 copy A 放置位
     var fi: i64 = 0
     var b_i: i64 = 0

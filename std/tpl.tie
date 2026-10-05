@@ -346,7 +346,7 @@ func bind_idx(bnames: table<string>, bidxs: table<i64>, name: string) -> table<i
 // cur 为单元素表承载游标（读当前位置 / 写推进后位置）。
 
 // 求值首要元素：字符串/数字字面量、true/false、变量 / 条目.item.index。
-func eval_primary(s: string, ce: i64, cur: table<i64>,
+func eval_primary(s: string, ce: i64, ref cur: table<i64>,
                   vars: table<string>, bnames: table<string>,
                   bvals: table<string>, bidxs: table<i64>) -> TplVal {
     var r = TplVal()
@@ -445,7 +445,7 @@ func eval_primary(s: string, ce: i64, cur: table<i64>,
 }
 
 // 比较层：primary (== | != | < | >) primary?；无操作数则返回 primary。
-func eval_cmp(s: string, ce: i64, cur: table<i64>,
+func eval_cmp(s: string, ce: i64, ref cur: table<i64>,
               vars: table<string>, bnames: table<string>,
               bvals: table<string>, bidxs: table<i64>) -> TplVal {
     var l = eval_primary(s, ce, cur, vars, bnames, bvals, bidxs)
@@ -503,7 +503,7 @@ func eval_cmp(s: string, ce: i64, cur: table<i64>,
 }
 
 // 逻辑与层：cmp (&& cmp)*；左假则短路（不 eval 右侧）。
-func eval_and(s: string, ce: i64, cur: table<i64>,
+func eval_and(s: string, ce: i64, ref cur: table<i64>,
               vars: table<string>, bnames: table<string>,
               bvals: table<string>, bidxs: table<i64>) -> TplVal {
     var v = eval_cmp(s, ce, cur, vars, bnames, bvals, bidxs)
@@ -534,7 +534,7 @@ func eval_and(s: string, ce: i64, cur: table<i64>,
 }
 
 // 逻辑或层：and (|| and)*；左真则短路（不 eval 右侧）。
-func eval_or(s: string, ce: i64, cur: table<i64>,
+func eval_or(s: string, ce: i64, ref cur: table<i64>,
              vars: table<string>, bnames: table<string>,
              bvals: table<string>, bidxs: table<i64>) -> TplVal {
     var v = eval_and(s, ce, cur, vars, bnames, bvals, bidxs)

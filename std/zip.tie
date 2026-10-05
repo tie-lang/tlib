@@ -34,13 +34,13 @@ namespace zip {
 // ============================================================================
 
 // 追加 u16 LE（2 字节）到 out。
-func push_le16(out: table<i64>, v: i64) {
+func push_le16(ref out: table<i64>, v: i64) {
     table_push(out, v & 0xFF)
     table_push(out, (v >> 8) & 0xFF)
 }
 
 // 追加 u32 LE（4 字节）到 out。
-func push_le32(out: table<i64>, v: i64) {
+func push_le32(ref out: table<i64>, v: i64) {
     table_push(out, v & 0xFF)
     table_push(out, (v >> 8) & 0xFF)
     table_push(out, (v >> 16) & 0xFF)
@@ -59,7 +59,7 @@ func rd_le32(b: table<i64>, pos: i64) -> i64 {
 }
 
 // 把整张表 b 追加到 out 末尾。
-func push_all(out: table<i64>, b: table<i64>) {
+func push_all(ref out: table<i64>, b: table<i64>) {
     var n = len(b)
     var i: i64 = 0
     while i < n {
