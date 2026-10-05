@@ -160,7 +160,7 @@ func parse_value(ref out: table<string>, key: string, rhs: string) -> bool {
 }
 
 // 内联表 {} 或 值数组 [] 解析。isArr=1 数组（下标），=0 内联表（具名键）。
-func parse_bracket(out: table<string>, key: string, rhs: string, isArr: i64) -> bool {
+func parse_bracket(ref out: table<string>, key: string, rhs: string, isArr: i64) -> bool {
     var n = str_len(rhs)
     if n < 2 {
         set_err("表/数组空体未闭合: " + key)
