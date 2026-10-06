@@ -46,8 +46,8 @@ namespace diffusion {
 // ---- 线性 β 调度 ----
 // β(t)=β0+t·(β1−β0)/(n−1)，单调线性上升；前 n 槽填充，其余 0。
 // EN: linear beta schedule betas[0..n-1], rest 0.
-pub func schedule_linear(n_steps: i64, beta_start: f64, beta_end: f64) -> array<f64, 1024> {
-    var betas: array<f64, 1024> = array_init(0.0)
+pub func schedule_linear<CAP: i64 = 1024>(n_steps: i64, beta_start: f64, beta_end: f64) -> array<f64, CAP> {
+    var betas: array<f64, CAP> = array_init(0.0)
     if n_steps <= 0 {
         return betas
     }
@@ -55,10 +55,10 @@ pub func schedule_linear(n_steps: i64, beta_start: f64, beta_end: f64) -> array<
         betas[0] = beta_start
         return betas
     }
-    var span = as_f64(n_steps - 1)
+    var span = to_f64(n_steps - 1)
     var t: i64 = 0
     while t < n_steps {
-        var tt = as_f64(t)
+        var tt = to_f64(t)
         betas[t] = beta_start + (beta_end - beta_start) * (tt / span)
         t = t + 1
     }
@@ -69,17 +69,17 @@ pub func schedule_linear(n_steps: i64, beta_start: f64, beta_end: f64) -> array<
 // ᾱ(t)=cos((t/n+s)/(1+s)·π/2)²，β(t)=1−ᾱ(t)/ᾱ(t−1)（ᾱ(−1)=1）。小 s（如 0.008）时
 // t=0 的 ᾱ≈1；ß 由 ᾱ 单调降推出恒非负（兜底钳 0）。
 // EN: cosine beta schedule via alpha-bar cosine; beta = 1 - alpha_c(t)/alpha_c(t-1).
-pub func schedule_cosine(n_steps: i64, s: f64) -> array<f64, 1024> {
-    var betas: array<f64, 1024> = array_init(0.0)
+pub func schedule_cosine<CAP: i64 = 1024>(n_steps: i64, s: f64) -> array<f64, CAP> {
+    var betas: array<f64, CAP> = array_init(0.0)
     if n_steps <= 0 {
         return betas
     }
-    var ac: array<f64, 1024> = array_init(0.0)
+    var ac: array<f64, CAP> = array_init(0.0)
     var ones = 1.0 + s
     var half_pi = 1.5707963267948966
     var t: i64 = 0
     while t < n_steps {
-        var frac = as_f64(t) / as_f64(n_steps)
+        var frac = to_f64(t) / to_f64(n_steps)
         var ang = (frac + s) / ones * half_pi
         ac[t] = cos(ang) * cos(ang)
         t = t + 1
@@ -103,8 +103,8 @@ pub func schedule_cosine(n_steps: i64, s: f64) -> array<f64, 1024> {
 // ---- ᾱ 累积乘积（f64）----
 // ᾱ(t)=∏_{k=0..t}(1−β_k)。返回前 n 槽，其余 0。
 // EN: cumulative alpha prod over betas, first n slots filled.
-pub func alpha_cumprod(betas: ref array<f64, 1024>, n: i64) -> array<f64, 1024> {
-    var acp: array<f64, 1024> = array_init(0.0)
+pub func alpha_cumprod<CAP: i64 = 1024>(betas: ref array<f64, CAP>, n: i64) -> array<f64, CAP> {
+    var acp: array<f64, CAP> = array_init(0.0)
     var acc: f64 = 1.0
     var t: i64 = 0
     while t < n {
@@ -117,13 +117,13 @@ pub func alpha_cumprod(betas: ref array<f64, 1024>, n: i64) -> array<f64, 1024> 
 
 // ---- ᾱ 累积乘积（f32，供张量/加噪直接使用）----
 // EN: alpha_cumprod as f32 for tensor add_noise consumers.
-pub func alpha_cumprod_f32(betas: ref array<f64, 1024>, n: i64) -> array<f32, 1024> {
-    var acp: array<f32, 1024> = array_init(0.0)
+pub func alpha_cumprod_f32<CAP: i64 = 1024>(betas: ref array<f64, CAP>, n: i64) -> array<f32, CAP> {
+    var acp: array<f32, CAP> = array_init(0.0)
     var acc: f64 = 1.0
     var t: i64 = 0
     while t < n {
         acc = acc * (1.0 - betas[t])
-        acp[t] = as_f32(acc)
+        acp[t] = to_f32(acc)
         t = t + 1
     }
     return acp
@@ -133,8 +133,8 @@ pub func alpha_cumprod_f32(betas: ref array<f64, 1024>, n: i64) -> array<f32, 10
 // dim≤1024；i 偶位 sin、奇位 cos，角度 t·10000^{−2·(i/2)/dim}（用 exp(−2·pair/dim·ln10000)）。
 // 对称性：t→−t 偶位取反、奇位不变（半对称）。
 // EN: sinusoidal timestep embedding (sin on even idx, cos on odd), dim<=1024.
-pub func timestep_embedding(t: i64, dim: i64) -> array<f64, 1024> {
-    var e: array<f64, 1024> = array_init(0.0)
+pub func timestep_embedding<CAP: i64 = 1024>(t: i64, dim: i64) -> array<f64, CAP> {
+    var e: array<f64, CAP> = array_init(0.0)
     if dim <= 0 {
         return e
     }
@@ -145,8 +145,8 @@ pub func timestep_embedding(t: i64, dim: i64) -> array<f64, 1024> {
     var i: i64 = 0
     while i < dim {
         var pair = i / 2
-        var ex = -2.0 * as_f64(pair) / as_f64(dim)
-        var ang = as_f64(t) * exp(ex * ln10k)
+        var ex = -2.0 * to_f64(pair) / to_f64(dim)
+        var ang = to_f64(t) * exp(ex * ln10k)
         if i % 2 == 0 {
             e[i] = sin(ang)
         } else {
@@ -161,25 +161,25 @@ pub func timestep_embedding(t: i64, dim: i64) -> array<f64, 1024> {
 // ε 优先取 noise 池；若 noise[0]==0.0（哨兵表示"没给噪声"）则由 r 用 gauss 生成标准正态
 // ε。out 写结果，返回传回更新后的 Rng。f64 计算 as_f32 回写。
 // EN: forward add-noise; epsilon from noise pool, or generated (gauss) if noise[0]==0.
-pub func add_noise(x0: ref array<f32, 1024>, n: i64, t: i64, noise: ref array<f32, 1024>,
-                   acp: ref array<f64, 1024>, out: ref array<f32, 1024>, r: Rng) -> Rng {
+pub func add_noise<CAP: i64 = 1024>(x0: ref array<f32, CAP>, n: i64, t: i64, noise: ref array<f32, CAP>,
+                   acp: ref array<f64, CAP>, out: ref array<f32, CAP>, r: Rng) -> Rng {
     var at = acp[t]
     var g1 = sqrt(at)
     var g2 = sqrt(1.0 - at)
     var useNoise: bool = true
-    if as_f64(noise[0]) == 0.0 {
+    if to_f64(noise[0]) == 0.0 {
         useNoise = false
     }
     var rr: Rng = r
     var i: i64 = 0
     while i < n {
-        var eps: f64 = as_f64(noise[i])
+        var eps: f64 = to_f64(noise[i])
         if !useNoise {
             var p = trng.gauss(rr)
             rr = p.r2
             eps = p.v2
         }
-        out[i] = as_f32(g1 * as_f64(x0[i]) + g2 * eps)
+        out[i] = to_f32(g1 * to_f64(x0[i]) + g2 * eps)
         i = i + 1
     }
     return rr
@@ -190,8 +190,8 @@ pub func add_noise(x0: ref array<f32, 1024>, n: i64, t: i64, noise: ref array<f3
 // σₜ·z 随机项（σₜ=√βₜ=√(1−ᾱₜ/ᾱₜ₋₁)，z~N(0,1) 由 r 生成）；sample=false 为确定性反演
 // （给定真实 ε 可精确还原 x0）。t=0：1−ᾱ₀=0 且不加噪 → 干净输出。返回更新后的 Rng。
 // EN: one reverse denoising step; sigma noise from beta (ᾱ ratio) when sample & t>0.
-pub func denoise_step(x: ref array<f32, 1024>, n: i64, t: i64, enoise: ref array<f32, 1024>,
-                      acp: ref array<f64, 1024>, r: Rng, out: ref array<f32, 1024>, sample: bool) -> Rng {
+pub func denoise_step<CAP: i64 = 1024>(x: ref array<f32, CAP>, n: i64, t: i64, enoise: ref array<f32, CAP>,
+                      acp: ref array<f64, CAP>, r: Rng, out: ref array<f32, CAP>, sample: bool) -> Rng {
     var at = acp[t]
     var inv = 1.0 / sqrt(at)
     // 噪声系数 (1-ᾱₜ)/√(1-ᾱₜ) ≡ √(1-ᾱₜ)，后者在 ᾱₜ=1 时稳定为 0（避免 0/0）。
@@ -199,8 +199,8 @@ pub func denoise_step(x: ref array<f32, 1024>, n: i64, t: i64, enoise: ref array
     var rr: Rng = r
     var i: i64 = 0
     while i < n {
-        var xp = inv * (as_f64(x[i]) - tscale * as_f64(enoise[i]))
-        out[i] = as_f32(xp)
+        var xp = inv * (to_f64(x[i]) - tscale * to_f64(enoise[i]))
+        out[i] = to_f32(xp)
         i = i + 1
     }
     if sample && t > 0 {
@@ -214,7 +214,7 @@ pub func denoise_step(x: ref array<f32, 1024>, n: i64, t: i64, enoise: ref array
         while j < n {
             var pz = trng.gauss(rr)
             rr = pz.r2
-            out[j] = as_f32(as_f64(out[j]) + sig * pz.v2)
+            out[j] = to_f32(to_f64(out[j]) + sig * pz.v2)
             j = j + 1
         }
     }
@@ -226,16 +226,16 @@ pub func denoise_step(x: ref array<f32, 1024>, n: i64, t: i64, enoise: ref array
 // 取自扁平表 eno[t*n .. t*n+n]（调用方用模型 forward 逐步预计算填入，steps*n≤1024）。
 // strat=true 加 σₜ·z 随机（随机化 DDPM）；false 为确定性（DDIM 风格）。返回更新 Rng。
 // EN: full reverse loop driven by a user-filled predict-noise table (steps*n<=1024).
-pub func sample(x: ref array<f32, 1024>, n: i64, steps: i64, acp: ref array<f64, 1024>,
-                eno: ref array<f32, 1024>, r: Rng, out: ref array<f32, 1024>, strat: bool) -> Rng {
+pub func sample<CAP: i64 = 1024>(x: ref array<f32, CAP>, n: i64, steps: i64, acp: ref array<f64, CAP>,
+                eno: ref array<f32, CAP>, r: Rng, out: ref array<f32, CAP>, strat: bool) -> Rng {
     var rr: Rng = r
     var i: i64 = 0
     while i < n {
         out[i] = x[i]
         i = i + 1
     }
-    var tmp: array<f32, 1024> = array_init(0.0)
-    var enes: array<f32, 1024> = array_init(0.0)
+    var tmp: array<f32, CAP> = array_init(0.0)
+    var enes: array<f32, CAP> = array_init(0.0)
     var t = steps - 1
     while t >= 0 {
         var k: i64 = 0
@@ -248,7 +248,7 @@ pub func sample(x: ref array<f32, 1024>, n: i64, steps: i64, acp: ref array<f64,
         var tscale = sqrt(1.0 - at)
         var m: i64 = 0
         while m < n {
-            tmp[m] = as_f32(inv * (as_f64(out[m]) - tscale * as_f64(enes[m])))
+            tmp[m] = to_f32(inv * (to_f64(out[m]) - tscale * to_f64(enes[m])))
             m = m + 1
         }
         if strat && t > 0 {
@@ -262,7 +262,7 @@ pub func sample(x: ref array<f32, 1024>, n: i64, steps: i64, acp: ref array<f64,
             while j < n {
                 var pz = trng.gauss(rr)
                 rr = pz.r2
-                tmp[j] = as_f32(as_f64(tmp[j]) + sig * pz.v2)
+                tmp[j] = to_f32(to_f64(tmp[j]) + sig * pz.v2)
                 j = j + 1
             }
         }
@@ -281,11 +281,11 @@ pub func sample(x: ref array<f32, 1024>, n: i64, steps: i64, acp: ref array<f64,
 // = 2(ε_pred−noise)/n（经 loss.mse_grad(epred,noise)），供调用方接 nn backward 链。
 // x0/t/acp 为兼容签名保留（完整 noising 由调用方拼装 add_noise），本函数只算损失+梯度。
 // EN: epsilon-prediction MSE + mse_grad w.r.t. pred; returns the loss scalar.
-pub func train_step(x0: ref array<f32, 1024>, n: i64, t: i64, noise: ref array<f32, 1024>,
-                    enoise_pred: ref array<f32, 1024>, acp: ref array<f64, 1024>,
-                    gw: ref array<f32, 1024>) -> f64 {
-    var L = loss.mse(noise, n, enoise_pred, n)
-    loss.mse_grad(gw, enoise_pred, noise, n)
+pub func train_step<CAP: i64 = 1024>(x0: ref array<f32, CAP>, n: i64, t: i64, noise: ref array<f32, CAP>,
+                    enoise_pred: ref array<f32, CAP>, acp: ref array<f64, CAP>,
+                    gw: ref array<f32, CAP>) -> f64 {
+    var L = loss.mse<CAP>(noise, n, enoise_pred, n)
+    loss.mse_grad<CAP>(gw, enoise_pred, noise, n)
     return L
 }
 
