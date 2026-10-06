@@ -27,23 +27,23 @@ const EPS: f64 = 0.00000001
 
 // 带权重衰减的随机梯度下降：w -= lr*(gw + wd*w)。逐元素独立，f64 算 f32 回写。
 // EN: SGD with weight decay: w -= lr*(gw + wd*w), elementwise, f64->f32.
-pub func sgd_step(w: ref array<f32, 1024>, n: i64, gw: ref array<f32, 1024>, lr: f64, wd: f64) {
+pub func sgd_step<CAP: i64 = 1024>(w: ref array<f32, CAP>, n: i64, gw: ref array<f32, CAP>, lr: f64, wd: f64) {
     var i: i64 = 0
     while i < n {
-        var g: f64 = as_f64(gw[i]) + wd * as_f64(w[i])
-        w[i] = as_f32(as_f64(w[i]) - lr * g)
+        var g: f64 = to_f64(gw[i]) + wd * to_f64(w[i])
+        w[i] = to_f32(to_f64(w[i]) - lr * g)
         i = i + 1
     }
 }
 
 // AdamW 一步：更新 m/v,用偏差校正的 m̂/√(v̂+eps) + 独立 weight-decay 更新 w。
 // EN: AdamW step: w -= lr*(wd*w + mhat/(sqrt(vhat)+eps)); m/v updated.
-pub func adamw_step(w: ref array<f32, 1024>, n: i64, gw: ref array<f32, 1024>,
-                    m: ref array<f32, 1024>, v: ref array<f32, 1024>, tt: i64,
+pub func adamw_step<CAP: i64 = 1024>(w: ref array<f32, CAP>, n: i64, gw: ref array<f32, CAP>,
+                    m: ref array<f32, CAP>, v: ref array<f32, CAP>, tt: i64,
                     lr: f64, wd: f64, b1: f64, b2: f64, eps: f64) {
     var cb1: f64 = 1.0
     var cb2: f64 = 1.0
-    var p: f64 = as_f64(tt)
+    var p: f64 = to_f64(tt)
     var k: i64 = 0
     while k < tt {
         cb1 = cb1 * b1
@@ -56,24 +56,24 @@ pub func adamw_step(w: ref array<f32, 1024>, n: i64, gw: ref array<f32, 1024>,
     var onem2 = 1.0 - b2
     var i: i64 = 0
     while i < n {
-        var g: f64 = as_f64(gw[i])
-        var mi: f64 = b1 * as_f64(m[i]) + onem1 * g
-        var vi: f64 = b2 * as_f64(v[i]) + onem2 * g * g
-        m[i] = as_f32(mi)
-        v[i] = as_f32(vi)
+        var g: f64 = to_f64(gw[i])
+        var mi: f64 = b1 * to_f64(m[i]) + onem1 * g
+        var vi: f64 = b2 * to_f64(v[i]) + onem2 * g * g
+        m[i] = to_f32(mi)
+        v[i] = to_f32(vi)
         var mhat = mi / b1c
         var vhat = vi / b2c
-        var step: f64 = wd * as_f64(w[i]) + mhat / (sqrt(vhat) + eps)
-        w[i] = as_f32(as_f64(w[i]) - lr * step)
+        var step: f64 = wd * to_f64(w[i]) + mhat / (sqrt(vhat) + eps)
+        w[i] = to_f32(to_f64(w[i]) - lr * step)
         i = i + 1
     }
 }
 
 // 余弦退火 LR：min + 0.5*(base-min)*(1+cos(π*step/total))。
 // EN: cosine annealing LR: min + 0.5*(base-min)*(1+cos(pi*step/total)).
-pub func lr_cosine(step: i64, total: i64, base: f64, min: f64) -> f64 {
-    var st: f64 = as_f64(step)
-    var tt: f64 = as_f64(total)
+pub func lr_cosine<CAP: i64 = 1024>(step: i64, total: i64, base: f64, min: f64) -> f64 {
+    var st: f64 = to_f64(step)
+    var tt: f64 = to_f64(total)
     var frac: f64 = 0.0
     if tt > 0.0 {
         frac = st / tt
@@ -82,7 +82,7 @@ pub func lr_cosine(step: i64, total: i64, base: f64, min: f64) -> f64 {
 }
 
 // 恒定 LR（恒返回 lr）。EN: constant LR, returns lr as-is.
-pub func lr_constant(lr: f64) -> f64 {
+pub func lr_constant<CAP: i64 = 1024>(lr: f64) -> f64 {
     return lr
 }
 

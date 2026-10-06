@@ -19,11 +19,11 @@ namespace serde {
 
 // ---- 权重池 → 文件（仅 f32 权重，小端 4 字节）；成功返回 true ----
 // EN: write n f32 (little-endian) to file; true on success.
-pub func save_weights(ws: ref array<f32, 1024>, n: i64, path: string) -> bool {
+pub func save_weights<CAP: i64 = 1024>(ws: ref array<f32, CAP>, n: i64, path: string) -> bool {
     var b = buf.new()
     var i: i64 = 0
     while i < n {
-        b = buf.push_f32(b, as_f64(ws[i]))
+        b = buf.push_f32(b, to_f64(ws[i]))
         i = i + 1
     }
     return buf.write_bytes(b, path)
@@ -31,7 +31,7 @@ pub func save_weights(ws: ref array<f32, 1024>, n: i64, path: string) -> bool {
 
 // ---- 文件 → 权重池；返回实际读入元素数（min(n, 文件f32数)），不足补 0，无文件则 0 ----
 // EN: read f32 stream into pool; returns count read (pad zeros when file short).
-pub func load_weights(me: ref array<f32, 1024>, n: i64, path: string) -> i64 {
+pub func load_weights<CAP: i64 = 1024>(me: ref array<f32, CAP>, n: i64, path: string) -> i64 {
     var b = buf.load(path)
     var avail = buf.length(b) / 4
     var cnt = avail
@@ -43,7 +43,7 @@ pub func load_weights(me: ref array<f32, 1024>, n: i64, path: string) -> i64 {
     }
     var i: i64 = 0
     while i < cnt {
-        me[i] = as_f32(buf.f32_at(b, i * 4))
+        me[i] = to_f32(buf.f32_at(b, i * 4))
         i = i + 1
     }
     var j: i64 = cnt
@@ -56,12 +56,12 @@ pub func load_weights(me: ref array<f32, 1024>, n: i64, path: string) -> i64 {
 
 // ---- checkpoint 落盘：i64 step + n 个 f32 权重；成功返回 true ----
 // EN: write [i64 step][weights] ; true on success.
-pub func save_checkpoint(step: i64, ws: ref array<f32, 1024>, n: i64, path: string) -> bool {
+pub func save_checkpoint<CAP: i64 = 1024>(step: i64, ws: ref array<f32, CAP>, n: i64, path: string) -> bool {
     var b = buf.new()
     b = buf.push_i64(b, step)
     var i: i64 = 0
     while i < n {
-        b = buf.push_f32(b, as_f64(ws[i]))
+        b = buf.push_f32(b, to_f64(ws[i]))
         i = i + 1
     }
     return buf.write_bytes(b, path)
@@ -70,7 +70,7 @@ pub func save_checkpoint(step: i64, ws: ref array<f32, 1024>, n: i64, path: stri
 // ---- checkpoint 载入：读回 step，并把后续权重入池；损坏（不足 8 字节）返回 -1 ----
 // 返回值为 step（可 >0 或 0）；读取异常/文件过短（<8 字节）返回 -1 表示损坏/不可用。
 // EN: load checkpoint; returns step, or -1 when file is corrupt (<8 bytes).
-pub func load_checkpoint(ws: ref array<f32, 1024>, n: i64, path: string) -> i64 {
+pub func load_checkpoint<CAP: i64 = 1024>(ws: ref array<f32, CAP>, n: i64, path: string) -> i64 {
     var b = buf.load(path)
     var total = buf.length(b)
     if total < 8 {
@@ -87,7 +87,7 @@ pub func load_checkpoint(ws: ref array<f32, 1024>, n: i64, path: string) -> i64 
     }
     var i: i64 = 0
     while i < cnt {
-        ws[i] = as_f32(buf.f32_at(b, 8 + i * 4))
+        ws[i] = to_f32(buf.f32_at(b, 8 + i * 4))
         i = i + 1
     }
     var j: i64 = cnt

@@ -13,7 +13,7 @@ namespace loss {
 
 // 均方误差：mean((a-b)²)；取公共 min 长度，na/nb 任一为 0 返回 0。
 // EN: mean squared error over min(n_a,n_b); 0 when either length is 0.
-pub func mse(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i64) -> f64 {
+pub func mse<CAP: i64 = 1024>(ma: ref array<f32, CAP>, na: i64, mb: ref array<f32, CAP>, nb: i64) -> f64 {
     var L = na
     if nb < L {
         L = nb
@@ -24,16 +24,16 @@ pub func mse(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i6
     var s: f64 = 0.0
     var i: i64 = 0
     while i < L {
-        var d: f64 = as_f64(ma[i]) - as_f64(mb[i])
+        var d: f64 = to_f64(ma[i]) - to_f64(mb[i])
         s = s + d * d
         i = i + 1
     }
-    return s / as_f64(L)
+    return s / to_f64(L)
 }
 
 // 平均绝对误差：mean(|a-b|)；取公共 min 长度。
 // EN: mean absolute error over min(n_a,n_b).
-pub func mae(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i64) -> f64 {
+pub func mae<CAP: i64 = 1024>(ma: ref array<f32, CAP>, na: i64, mb: ref array<f32, CAP>, nb: i64) -> f64 {
     var L = na
     if nb < L {
         L = nb
@@ -44,47 +44,47 @@ pub func mae(ma: ref array<f32, 1024>, na: i64, mb: ref array<f32, 1024>, nb: i6
     var s: f64 = 0.0
     var i: i64 = 0
     while i < L {
-        var d: f64 = as_f64(ma[i]) - as_f64(mb[i])
+        var d: f64 = to_f64(ma[i]) - to_f64(mb[i])
         if d < 0.0 {
             d = -d
         }
         s = s + d
         i = i + 1
     }
-    return s / as_f64(L)
+    return s / to_f64(L)
 }
 
 // MSE 梯度：out[i] = 2(a[i]-b[i])/n（对 a 的梯度）。EN: mse grad 2(a-b)/n.
-pub func mse_grad(gout: ref array<f32, 1024>, ma: ref array<f32, 1024>, mb: ref array<f32, 1024>, n: i64) {
+pub func mse_grad<CAP: i64 = 1024>(gout: ref array<f32, CAP>, ma: ref array<f32, CAP>, mb: ref array<f32, CAP>, n: i64) {
     if n <= 0 {
         return
     }
-    var inv: f64 = 2.0 / as_f64(n)
+    var inv: f64 = 2.0 / to_f64(n)
     var i: i64 = 0
     while i < n {
-        var d: f64 = as_f64(ma[i]) - as_f64(mb[i])
-        gout[i] = as_f32(d * inv)
+        var d: f64 = to_f64(ma[i]) - to_f64(mb[i])
+        gout[i] = to_f32(d * inv)
         i = i + 1
     }
 }
 
 // MAE 梯度：out[i] = sign(a[i]-b[i])/n。EN: mae grad sign(a-b)/n.
-pub func mae_grad(gout: ref array<f32, 1024>, ma: ref array<f32, 1024>, mb: ref array<f32, 1024>, n: i64) {
+pub func mae_grad<CAP: i64 = 1024>(gout: ref array<f32, CAP>, ma: ref array<f32, CAP>, mb: ref array<f32, CAP>, n: i64) {
     if n <= 0 {
         return
     }
-    var inv: f64 = 1.0 / as_f64(n)
+    var inv: f64 = 1.0 / to_f64(n)
     var i: i64 = 0
     while i < n {
-        var a: f64 = as_f64(ma[i])
-        var b: f64 = as_f64(mb[i])
+        var a: f64 = to_f64(ma[i])
+        var b: f64 = to_f64(mb[i])
         var out: f64 = 0.0
         if a > b {
             out = 1.0
         } else if a < b {
             out = -1.0
         }
-        gout[i] = as_f32(out * inv)
+        gout[i] = to_f32(out * inv)
         i = i + 1
     }
 }
