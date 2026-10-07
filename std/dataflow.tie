@@ -1,4 +1,9 @@
-type tie<class>
+type tie<class, unsafe, unsafe:share>
+// ↑ 头部必须在文件最前（§2.1），故声明在前、说明在后。
+// 2026-10-07：本库的 spawn 需要【上下文】+【share 凭据】两把锁（规范 §11.6）。
+// `unsafe` 开「整个文件的不安全上下文」，`unsafe:share` 授 share 域凭据 ——
+// 二者缺一不可（只给凭据报 E00903，只开上下文报 E00904）。
+// 文件级声明只作用于本文件：调用方**无需**任何改动，`run_par` 的签名保持安全。
 // std/dataflow.tie —— 并行数据流图（p.9.13.5 最小内核）
 // EN: parallel dataflow graph (p.9.13.5 minimal kernel).
 // ============================================================
