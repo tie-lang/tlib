@@ -176,4 +176,20 @@ pub func lookup(id: i64) -> string {
 pub func interned_len() -> i64 {
     return len(intern_pool)
 }
+
+// p.9.16.1 内存工程：把池回退到**空始态**（长驻进程——LSP——的内存回收入口）。
+// 清空 id→串池 / 正查键值表 / 哈希桶 / 桶数；此后新登记从 id 0 重新分配。
+//
+// ⚠ 约定（调用方必须遵守）：调用后先前取得的**任何 id 全部失效**。故调用点只在
+// 「本代 AST 已整体用完」时出现——编译器侧配套接口 `semantic.release_ast()`
+// 把 s_* 列式表与池**同批**清空，两者必须成对（单清池会让 s_names 指到空池）。
+// 纯 tie、零新增运行时（无析构器、无引用计数）；仅把全局表换成新空表 ⇒ 旧表
+// 交给运行时回收。
+pub func reset() {
+    intern_pool = table_new_string()
+    intern_keys = table_new_string()
+    intern_vals = table_new_i64()
+    intern_bucket = table_new_i64()
+    intern_bcnt = 0
+}
 }
