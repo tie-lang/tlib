@@ -7,16 +7,16 @@ type tie<logic>
 // 全部 PASS 打印 `tinkv2:ALL:PASS` 且 exit 0。
 
 import "./tink_v2.tie" as t2
-import "./tsha1.tie" as tsha
+import "./tsha2.tie" as tsha2
 import "./tink.tie" as tink
 import "./time.tie" as time
 
 // 跨语言 KAT 常量（首次运行由下面 println 打印实际值，固化后填回断言）。
-// 快校验：tsha1f("",8,48) 与 tsha1f("123456789",8,48) 的 8 符号 48 进制串。
-var ks_empty: string = "5juavlyl"
-var ks_nine: string = "3Kz1piuc"
-// 强档：tsha1_digest("f","123456789",48) 全宽 hex 前 64 字符（= 前 32 字节 hex）。
-var ks_strong: string = "260c7340bcc60eb82c727e6df6f9c7620d040c2d4837ee96dc333f1a16fd76bf"
+// 快校验：tsha2f("",8,48) 与 tsha2f("123456789",8,48) 的 8 符号 48 进制串。
+var ks_empty: string = "3Cc0000u"
+var ks_nine: string = "o18djrdv"
+// 强档：tsha2f("123456789",46,48) 的 46 符号 base48 串（前 32 字节 = 256 位）。
+var ks_strong: string = "o18djrdv3oJl4xzeCrb3sjvxboi8D3jrsh0p83k3E39h63"
 
 // 全局返回码：任一 FAIL 置 1，最终 main 返回。
 var g_rc: i64 = 0
@@ -110,23 +110,23 @@ func main() -> i64 {
     expect(ok1 == 1 && np1 == len(fr) && fl1 == 0 && iok1 == 1 && eqbytes(pl1, pA), "roundtrip")
 
     // ---- 2) 快校验 KAT（首次运行打印实际值，后固化为常量断言） ----
-    var ke = tsha.tsha1f("", 8, 48)
-    var kn = tsha.tsha1f("123456789", 8, 48)
+    var ke = tsha2.tsha2f("", 8, 48)
+    var kn = tsha2.tsha2f("123456789", 8, 48)
     println("KAT-FAST-EMPTY:" + ke)
     println("KAT-FAST-NINE:" + kn)
     expect(ke == ks_empty && kn == ks_nine, "fast_kat")
 
     // ---- 3) 强档 KAT ----
-    var dg = tsha.tsha1_digest("f", "123456789", 48)
+    var dg = tsha2.tsha2f("123456789", 46, 48)
     var dgl = str_len(dg)
-    expect(dgl >= 64, "strong_len")
+    expect(dgl == 46, "strong_len")
     var kh: string = ""
     var khk: i64 = 0
-    while khk < 64 {
+    while khk < 46 {
         kh = kh + str_char(dg, khk)
         khk = khk + 1
     }
-    println("KAT-STRONG-HEX:" + kh)
+    println("KAT-STRONG-B48:" + kh)
     expect(kh == ks_strong, "strong_kat")
     // 强档 frame_encode/flags=1 → 解析 integrity_ok=1
     var pS = ascii("123456789")
@@ -150,7 +150,7 @@ func main() -> i64 {
     var intgStr = table_new_i64()
     var ksi: i64 = len(frKS) - 32
     while ksi < len(frKS) { table_push(intgStr, frKS[ksi]); ksi = ksi + 1 }
-    expect(eqbytes(intgStr, hexb(ks_strong)), "frame_kat_strong")
+    expect(eqbytes(intgStr, ascii("o18djrdv3oJl4xzeCrb3sjvxboi8D3jr")), "frame_kat_strong")
 
     // ---- 4) 损坏帧拒绝（翻转 payload 1 字节 → 快校验 integrity_ok=0） ----
     var frT = t2.frame_encode(pA, 0, table_new_i64())

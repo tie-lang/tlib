@@ -7,19 +7,19 @@ type tie<class>
 // flags 位：bit0 INTEGRITY_STRONG（0=快校验默认，1=强档）、bit1 COMPRESSED、
 //   bit2 ENCRYPTED、bit3 STREAM、bit4 STREAM_END、bit5..7 保留。
 // 校验段（integrity）：
-//   - 快校验（bit0=0）：tsha1f(payload串, 8, 48)——8 符号 48 进制，ASCII 字节原样存（8 字节）
+//   - 快校验（bit0=0）：tsha2f(payload串, 8, 48)——8 符号 48 进制，ASCII 字节原样存（8 字节）
 //   - 强档（bit0=1，默认模型 f、位长 48，可用 TLV key1/key2 覆盖）：
-//     tsha1_digest(model, payload串, n) 全宽 hex → 转字节 → 取前 32 字节
-// 扩展头 = key u16 BE + value_len u16 BE + value 的 TLV 序列（key：1=TSHA1_MODEL、
-//   2=TSHA1_BITS、3=COMPRESS_ALGO、4=ENC_ALGO、5=STREAM_SESSION、6=STREAM_SEQ、
+//     强档：tsha2<tier>(payload串, 符号数, 48)——base48 字符 ASCII 取前 32 字节
+// 扩展头 = key u16 BE + value_len u16 BE + value 的 TLV 序列（key：1=TSHA2_TIER、
+//   2=TSHA2_SYMS、3=COMPRESS_ALGO、4=ENC_ALGO、5=STREAM_SESSION、6=STREAM_SEQ、
 //   7=STREAM_TOTAL、9=EXT_META；其余未定义）。**未知 key 解析时必须跳过**。
 // v1 兼容读（§5）：首两字节对不上 magic → 按 v1 帧（[len u32 BE][payload][crc u32 BE]，
 //   CRC32-IEEE）解析（复用 tink 的 CRC32）。
 //
 // == 校验基准说明 ==
-// 校验段 = tsha1 族直接作用于**原始 payload 字节**（设计 §3.3）：payload 字节表经
+// 校验段 = tsha2 族直接作用于**原始 payload 字节**（设计 §3.3）：payload 字节表经
 // string_builder + sb_append_byte 逐字节精确构串（二进制安全，含 0x00/0xFF），
-// tsha1f/tsha1_digest 内部按字节处理（同 blake/blake3 哈希任意字节串），
+// tsha2 内部按字节处理（同 blake/blake3 哈希任意字节串），
 // 任何语言实现按同一规则（直接哈希原始字节）即跨语言一致。
 // 性能纪律：帧组装用 bytes.concat（byte_concat 编译器内联批量拷贝）整块拼；
 // 校验对整 payload 一次计算；payload→串 sb_append_byte 摊销线性（非 O(n²)）。
@@ -27,7 +27,7 @@ type tie<class>
 // 置位视为格式错误 → ok=0（§5.3 未知位不可信策略）。
 
 import "./bytes.tie" as bytes
-import "./tsha1.tie" as tsha
+import "./tsha2.tie" as tsha2
 import "./tink.tie" as tink
 import "./x25519.tie" as x25519
 import "./hkdf.tie" as hkdf
@@ -38,7 +38,7 @@ namespace tink2 {
 // ---------- 常量 ----------
 // 帧：magic = 0x74 0x6B（"tk"）；version = 2
 // flags 位：1=STRONG 2=COMPRESSED 4=ENCRYPTED 8=STREAM 16=STREAM_END
-// ext key：1=TSHA1_MODEL 2=TSHA1_BITS 5=STREAM_SESSION 6=STREAM_SEQ 7=STREAM_TOTAL
+// ext key：1=TSHA2_TIER 2=TSHA2_SYMS 5=STREAM_SESSION 6=STREAM_SEQ 7=STREAM_TOTAL
 // 校验：快=8 字节；强=32 字节
 
 pub func magic_first() -> i64 { return 0x74 }
@@ -106,7 +106,7 @@ func slice(t: table<i64>, a: i64, b: i64) -> table<i64> {
 
 // 每字节精确追加进 StringBuilder（string_builder/sb_append_byte 全库原语，二进制
 // 安全——blake/blake3 哈希任意字节串同款；字节 0..255 原样落位，含 0x00/0xFF），
-// 一次 sb_build 产串。校验 = tsha1 族直接作用于**原始 payload 字节**（设计 §3.3），
+// 一次 sb_build 产串。校验 = tsha2 族直接作用于**原始 payload 字节**（设计 §3.3），
 // 与任何语言实现（直接哈希原始字节）跨语言一致。
 func payload_str(p: table<i64>) -> string {
     var sb = string_builder()
@@ -146,27 +146,34 @@ func hexstr_bytes(h: string) -> table<i64> {
 
 // 快校验：8 符号 48 进制，ASCII 字节原样存（8 字节）。
 func fast_integrity(p: table<i64>) -> table<i64> {
-    var s = tsha.tsha1f(payload_str(p), 8, 48)
+    var s = tsha2.tsha2f(payload_str(p), 8, 48)
     return bytes.from_ascii(s)
 }
 
 // 强档校验：digest 全宽 hex → 转字节 → 取前 32 字节；模型/位长按 ext key1/key2 覆盖。
 func strong_integrity(p: table<i64>, ext: table<i64>) -> table<i64> {
-    var m = ext_u8(ext, 1)   // key1 TSHA1_MODEL（0/1/2/3 = f/r/b/x；缺省 f）
-    var model: string = "f"
-    if m == 1 { model = "r" } else if m == 2 { model = "b" } else if m == 3 { model = "x" }
-    var nb = ext_u8(ext, 2)  // key2 TSHA1_BITS（缺省 48）
-    var nbits: i64 = 48
-    if nb >= 2 && nb <= 200 { nbits = nb }
-    var dh = tsha.tsha1_digest(model, payload_str(p), nbits) // 全宽 hex 串
-    var db = hexstr_bytes(dh)
+    var m = ext_u8(ext, 1)   // key1 TSHA2_TIER（0/1/2/3 = f/r/b/x；缺省 f）
+    var nb = ext_u8(ext, 2)  // key2 TSHA2_SYMS（48 进制符号数；缺省 46 ⇒ 256 位）
+    var ns: i64 = 46
+    if nb >= 8 && nb <= 255 { ns = nb }
+    var s: string = ""
+    if m == 1 {
+        s = tsha2.tsha2r(payload_str(p), ns, 48)
+    } else if m == 2 {
+        s = tsha2.tsha2b(payload_str(p), ns, 48)
+    } else if m == 3 {
+        s = tsha2.tsha2x(payload_str(p), ns, 48)
+    } else {
+        s = tsha2.tsha2f(payload_str(p), ns, 48)
+    }
+    var db = bytes.from_ascii(s)
     var out = table_new_i64()
     var k: i64 = 0
     while k < 32 {
         if k < len(db) {
             table_push(out, db[k])
         } else {
-            table_push(out, 0)  // 状态池不足（正常不应发生）补齐
+            table_push(out, 0)
         }
         k = k + 1
     }

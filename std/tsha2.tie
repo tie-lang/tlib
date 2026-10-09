@@ -1,0 +1,593 @@
+type tie<class>
+// ============================================================================
+// tsha2.tie：标准库——TSHA2 哈希族（三进制海绵 + 48 进制 XOF）
+// 用途：tie 平台标准安全哈希底座（指纹 / 完整性 / 身份段），替代 tsha1 的语义位
+//   （tsha1 因有效输出空间仅名义 83–88% 且无 XOF 已退役，保留为历史兼容读，
+//   消费方 tink_v2 等暂不迁移）。
+//
+// 设计与实测：docs/designs/tzp-format-family.md §6（tzp 格式族设计稿）
+//   探针 _tmp_tzp_probe/（tzp_fbx / tzp_xbig / tzp_xfin / tzp_ddtlat / stand_*）。
+//
+// == 结构（三进制海绵，位平面双编码）==
+//   状态 = N 子 lane × 64 列；每 trit 两个位平面（h=2、l=1，规范性 h & l == 0）。
+//   伙伴 = 双向环 (i+1)%N 与 (i−1+N)%N；更新顺序 = 偶数子 lane 先（全读旧值、
+//     彼此独立）→ 奇数子 lane 后（全读新值、彼此独立）——串行深度 2，构造性可逆
+//     （逆序先奇后偶逐 lane 恢复）。
+//   轮函数：lane_i ← lane_i + rot_k1( y1 × (y1 + c_i) ) + rot_k2( y2 × (y2 + c_i) )
+//     （逐 trit mod-3；乘 → 旋转 → 加）；c_i = 1+(i%2)，k1 = (i*7+5)%64，
+//     k2 = (i*11+23)%64。乘积项为 GF(3) 二次型 ⇒ planar/完美非线性：
+//     电路级 DDT 差分均匀度 1/3（理论理想）、LAT 全随机水平（tzp_ddtlat 实测）。
+//   吸收：消息 8 字节小端成字，mod-3 加进子 lane 低位平面。
+//   填充（Merkle–Damgård 强化）：0x80 + 补零 + 尾块末 8 字节小端消息长度；
+//     保证同一消息在不同 rate 档下吸收态必然不同（档位区分）。
+//   挤出（XOF）：从 rate 子 lane 逐列取 trit（lane 优先），每 10 trit → 3 个 48 进制
+//     符号（3^10 = 59049 ≤ 48^3 = 110592，无损无偏）；rate trit 耗尽再置换一轮续挤。
+//
+// == 四档（2026-10-09 定名；实测见设计稿 §6.6/§6.6b）==
+//   tsha2r  N=4   rate 24B  R=12  容量 101 位熵（~50 位抗碰撞）⚠ 嵌入式/blk 完整性
+//   tsha2f  N=12  rate 64B  R=12  容量 405 位熵（~202 位抗碰撞）快速大流量
+//   tsha2b  N=12  rate 48B  R=12  容量 608 位熵（~304 位抗碰撞）身份指纹
+//   tsha2x  N=24  rate 96B  R=16  容量 1216 位熵（~608 位抗碰撞）特大容量
+//   f 与 b 共用同一 12-lane 置换（一个置换 + 两个吸收宽度）。
+//   安全注记：DDT/LAT 已闭合（PN 达标 + 密码级 χ²）；R=12 有 ~5% 位置级混合残差、
+//     R=16 完全干净（设计稿 §6.7）；外部审查未做，不宣称"安全性顶尖"。
+//
+// 接口（公开四函数；与 tsha1 同约定）：
+//   tsha2.tsha2r(msg, n, base=48) -> string   同理 tsha2f / tsha2b / tsha2x
+//   n = 48 进制符号数（1..65536，XOF 任意长度）；base ∈ {2,3,8,16,48}（默认 48）；
+//   非法 n / base 返回空串。base=48 输出字符台同 base48.tie
+//   （"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"，一符号一字符）；
+//   base=16 输出 ⌊n·L48/8⌋ 字节的 hex（L48 = log2(48)）；base 2/3/8 走基转换。
+// 逐字节处理（str_byte + len），任意 UTF-8 原始字节可哈希；命名空间内互调为裸调用。
+// == 跨语言 KAT（向量 = 各语言实现的逐字节对拍基准；"123456789" 为 9 字节 ASCII）==
+//   tsha2r("",8)  = 1vz6jq6j
+//   tsha2f("",8)  = 3Cc0000u   （f/b 空消息同输出：共享置换 + 零吸收态，已知特性）
+//   tsha2b("",8)  = 3Cc0000u
+//   tsha2x("",8)  = 3Cc00000
+//   tsha2r("123456789",46) = f995z7iEcmts8wF1h1ksm3adjcdnK5pn3fDDllIevc5oud
+//   tsha2f("123456789",46) = o18djrdv3oJl4xzeCrb3sjvxboi8D3jrsh0p83k3E39h63
+//   tsha2b("123456789",46) = nItdjrkvmhiu4nweCr87fjvoclJ96H57Bh0y75FlCb9h67
+//   tsha2x("123456789",46) = 9C94mGhw0aw09KfeDi5zyp6Jca0km12HE20G83i4yx3s0l
+// == 语言移植矩阵 ==：主 tink 仓 27 语言实现目前仍为 tsha1 ⇒ 移植 tsha2 时以上述
+//   KAT 逐字节对拍后切换（后续波次）；zd-java 的 Tsha1f 同理。
+// ============================================================================
+
+// base48 字符台（同 std/base48.tie，索引 0..47 → '0'..）
+var t2_b48: string = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"
+
+// ---------------------------------------------------------------------------
+// 位平面原语（mod-3 逐列；h = 高平面/值 2，l = 低平面/值 1）
+// ---------------------------------------------------------------------------
+
+var S2: table<i64>;
+
+var G2_MSG: string = "";
+
+var t2_cur_lane: i64 = 0;
+var t2_cur_col: i64 = 0;
+
+
+// 子 lane 混合（乘 → 旋转 → 加；自身值只经加法进入输出 ⇒ 逆序可恢复）
+inline func t2_mix(ih: i64, il: i64, y1h: i64, y1l: i64, y2h: i64, y2l: i64, c: i64, k1: i64, k2: i64) -> (i64, i64) {
+    var a1h: i64 = 0
+    var a1l: i64 = 0
+    var a2h: i64 = 0
+    var a2l: i64 = 0
+    if c == 1 {
+        a1h = (y1h ^ (0 - 1)) & y1l
+        a1l = (y1h ^ (0 - 1)) & (y1l ^ (0 - 1))
+        a2h = (y2h ^ (0 - 1)) & y2l
+        a2l = (y2h ^ (0 - 1)) & (y2l ^ (0 - 1))
+    } else {
+        a1h = (y1h ^ (0 - 1)) & (y1l ^ (0 - 1))
+        a1l = (y1h ^ (0 - 1)) & y1l
+        a2h = (y2h ^ (0 - 1)) & (y2l ^ (0 - 1))
+        a2l = (y2h ^ (0 - 1)) & y2l
+    }
+    var p1h = t2_mul_r0(y1h, y1l, a1h, a1l)
+    var p1l = t2_mul_r1(y1h, y1l, a1h, a1l)
+    var p2h = t2_mul_r0(y2h, y2l, a2h, a2l)
+    var p2l = t2_mul_r1(y2h, y2l, a2h, a2l)
+    var t1 = t2_add_r0(ih, il, t2_rotl(p1h, k1), t2_rotl(p1l, k1))
+    var oh = t2_add_r1(ih, il, t2_rotl(p1h, k1), t2_rotl(p1l, k1))
+    var t2v = t2_add_r0(oh, t1, t2_rotl(p2h, k2), t2_rotl(p2l, k2))
+    var oh2 = t2_add_r1(oh, t1, t2_rotl(p2h, k2), t2_rotl(p2l, k2))
+    return (oh2, t2v)
+}
+
+
+
+// mod-3 加法：返回 (高平面, 低平面)；输入须规范（h & l == 0）
+func t2_add_r0(a1: i64, a0: i64, b1: i64, b0: i64) -> i64 {
+    var s0 = a0 ^ b0
+    var c0 = a0 & b0
+    var t = a1 ^ b1
+    var s1 = t ^ c0
+    var s2 = (a1 & b1) | (t & c0)
+    return s2 | ((s2 ^ (0 - 1)) & s0 & (s1 ^ (0 - 1)))
+}
+
+func t2_add_r1(a1: i64, a0: i64, b1: i64, b0: i64) -> i64 {
+    var s0 = a0 ^ b0
+    var c0 = a0 & b0
+    var t = a1 ^ b1
+    var s1 = t ^ c0
+    var s2 = (a1 & b1) | (t & c0)
+    return (s2 ^ (0 - 1)) & s1 & (s0 ^ (0 - 1))
+}
+
+// GF(3) 乘法的位平面分解（mul_r0 = 低平面、mul_r1 = 高平面）
+func t2_mul_r0(a1: i64, a0: i64, b1: i64, b0: i64) -> i64 {
+    return ((a1 | a0) & (b1 | b0)) & ((a1 & b1) | (a0 & b0))
+}
+
+func t2_mul_r1(a1: i64, a0: i64, b1: i64, b0: i64) -> i64 {
+    return ((a1 | a0) & (b1 | b0)) & (((a1 & b1) | (a0 & b0)) ^ (0 - 1))
+}
+
+// 循环左移（tie 的 >> 是算术右移 ⇒ 必须掩码右移结果）
+func t2_rotl(v: i64, n: i64) -> i64 {
+    if n == 0 { return v }
+    return (v << n) | ((v >> (64 - n)) & ((1 << n) - 1))
+}
+
+// y + c 的三值编码（c 只取 1 或 2）
+func t2_tc(h: i64, l: i64, c: i64) -> (i64, i64) {
+    if c == 1 {
+        return ((h ^ (0 - 1)) & l, (h ^ (0 - 1)) & (l ^ (0 - 1)))
+    }
+    return ((h ^ (0 - 1)) & (l ^ (0 - 1)), (h ^ (0 - 1)) & l)
+}
+
+
+
+// φ：Feistel 列分半（偶列 A / 奇列 B）——跨列非线性双射，own 项经 φ 后消息
+//   trit 不再加性持久（修复入库烟雾测试暴露的"值持久/短消息四档同输出"缺陷）。
+//   F(B) = B ⊗ rot2(B)：邻奇列 GF(3) 积（value-2 trit 经异列因子可传播）；
+//   (A', B') = (B, A + F(B))，Feistel 结构 ⇒ 双射无需证明。
+var T2_EV: i64 = 6148914691236517205
+
+func t2_feistel(Ph: i64, Pl: i64) -> (i64, i64) {
+    var Ah = Ph & T2_EV
+    var Al = Pl & T2_EV
+    var Bh = Ph & (T2_EV ^ (0 - 1))
+    var Bl = Pl & (T2_EV ^ (0 - 1))
+    var rh = t2_rotl(Bh, 2)
+    var rl = t2_rotl(Bl, 2)
+    var Fh = t2_mul_r1(Bh, Bl, rh, rl)
+    var Fl = t2_mul_r0(Bh, Bl, rh, rl)
+    // ★ 加常数 trit-1：抵消稀疏态下积为零的退化（F 稠密 ⇒ φ 真混合）
+    Fh = t2_add_r1(Fh, Fl, 0, 0 - 1)
+    Fl = t2_add_r0(Fh, Fl, 0, 0 - 1)
+    var F1h = t2_rotl(Fh, 1)
+    var F1l = t2_rotl(Fl, 1)
+    var A2h = t2_add_r1(Ah, Al, F1h, F1l)
+    var A2l = t2_add_r0(Ah, Al, F1h, F1l)
+    var ODM = T2_EV ^ (0 - 1)
+    var nh = (t2_rotl(Bh, 1) & T2_EV) | (t2_rotl(A2h, 63) & ODM)
+    var nl = (t2_rotl(Bl, 1) & T2_EV) | (t2_rotl(A2l, 63) & ODM)
+    return (nh, nl)
+}
+
+// ---------------------------------------------------------------------------
+// 状态与轮置换（全局状态表 S2：48 字 = 24 子 lane 上限；未用区域恒 0）
+// ---------------------------------------------------------------------------
+
+// N=4（tsha2r）：偶先奇后两相；常数 k1=(j*7+5)%64、k2=(j*11+23)%64、c=1+(j%2)
+func t2_perm4() {
+    var (e0h, e0l) = t2_mix(S2[0], S2[1], S2[2], S2[3], S2[6], S2[7], 1, 5, 23)
+    var (e2h, e2l) = t2_mix(S2[4], S2[5], S2[6], S2[7], S2[2], S2[3], 1, 19, 45)
+    S2[0] = e0h
+    S2[1] = e0l
+    S2[4] = e2h
+    S2[5] = e2l
+    var (o1h, o1l) = t2_mix(S2[2], S2[3], S2[4], S2[5], S2[0], S2[1], 2, 12, 34)
+    var (o3h, o3l) = t2_mix(S2[6], S2[7], S2[0], S2[1], S2[4], S2[5], 2, 26, 56)
+    var (g1h, g1l) = t2_feistel(o1h, o1l)
+    var (g3h, g3l) = t2_feistel(o3h, o3l)
+    S2[2] = g1h
+    S2[3] = g1l
+    S2[6] = g3h
+    S2[7] = g3l
+}
+
+// N=12（tsha2f / tsha2b）
+func t2_perm12() {
+    var (u0h, u0l) = t2_mix(S2[0], S2[1], S2[2], S2[3], S2[22], S2[23], 1, 5, 23)
+    var (u2h, u2l) = t2_mix(S2[4], S2[5], S2[6], S2[7], S2[2], S2[3], 1, 19, 45)
+    var (u4h, u4l) = t2_mix(S2[8], S2[9], S2[10], S2[11], S2[6], S2[7], 1, 33, 3)
+    var (u6h, u6l) = t2_mix(S2[12], S2[13], S2[14], S2[15], S2[10], S2[11], 1, 47, 25)
+    var (u8h, u8l) = t2_mix(S2[16], S2[17], S2[18], S2[19], S2[14], S2[15], 1, 61, 47)
+    var (u10h, u10l) = t2_mix(S2[20], S2[21], S2[22], S2[23], S2[18], S2[19], 1, 11, 5)
+    S2[0] = u0h
+    S2[1] = u0l
+    S2[4] = u2h
+    S2[5] = u2l
+    S2[8] = u4h
+    S2[9] = u4l
+    S2[12] = u6h
+    S2[13] = u6l
+    S2[16] = u8h
+    S2[17] = u8l
+    S2[20] = u10h
+    S2[21] = u10l
+    var (v1h, v1l) = t2_mix(S2[2], S2[3], S2[4], S2[5], S2[0], S2[1], 2, 12, 34)
+    var (v3h, v3l) = t2_mix(S2[6], S2[7], S2[8], S2[9], S2[4], S2[5], 2, 26, 56)
+    var (v5h, v5l) = t2_mix(S2[10], S2[11], S2[12], S2[13], S2[8], S2[9], 2, 40, 14)
+    var (v7h, v7l) = t2_mix(S2[14], S2[15], S2[16], S2[17], S2[12], S2[13], 2, 54, 36)
+    var (v9h, v9l) = t2_mix(S2[18], S2[19], S2[20], S2[21], S2[16], S2[17], 2, 4, 58)
+    var (v11h, v11l) = t2_mix(S2[22], S2[23], S2[0], S2[1], S2[20], S2[21], 2, 18, 16)
+    S2[2] = v1h
+    S2[3] = v1l
+    S2[6] = v3h
+    S2[7] = v3l
+    S2[10] = v5h
+    S2[11] = v5l
+    S2[14] = v7h
+    S2[15] = v7l
+    S2[18] = v9h
+    S2[19] = v9l
+    S2[22] = v11h
+    S2[23] = v11l
+}
+
+// N=24（tsha2x）
+func t2_perm24() {
+    var (w0h, w0l) = t2_mix(S2[0], S2[1], S2[2], S2[3], S2[46], S2[47], 1, 5, 23)
+    var (w2h, w2l) = t2_mix(S2[4], S2[5], S2[6], S2[7], S2[2], S2[3], 1, 19, 45)
+    var (w4h, w4l) = t2_mix(S2[8], S2[9], S2[10], S2[11], S2[6], S2[7], 1, 33, 3)
+    var (w6h, w6l) = t2_mix(S2[12], S2[13], S2[14], S2[15], S2[10], S2[11], 1, 47, 25)
+    var (w8h, w8l) = t2_mix(S2[16], S2[17], S2[18], S2[19], S2[14], S2[15], 1, 61, 47)
+    var (w10h, w10l) = t2_mix(S2[20], S2[21], S2[22], S2[23], S2[18], S2[19], 1, 11, 5)
+    var (w12h, w12l) = t2_mix(S2[24], S2[25], S2[26], S2[27], S2[22], S2[23], 1, 25, 27)
+    var (w14h, w14l) = t2_mix(S2[28], S2[29], S2[30], S2[31], S2[26], S2[27], 1, 39, 49)
+    var (w16h, w16l) = t2_mix(S2[32], S2[33], S2[34], S2[35], S2[30], S2[31], 1, 53, 7)
+    var (w18h, w18l) = t2_mix(S2[36], S2[37], S2[38], S2[39], S2[34], S2[35], 1, 3, 29)
+    var (w20h, w20l) = t2_mix(S2[40], S2[41], S2[42], S2[43], S2[38], S2[39], 1, 17, 51)
+    var (w22h, w22l) = t2_mix(S2[44], S2[45], S2[46], S2[47], S2[42], S2[43], 1, 31, 9)
+    S2[0] = w0h
+    S2[1] = w0l
+    S2[4] = w2h
+    S2[5] = w2l
+    S2[8] = w4h
+    S2[9] = w4l
+    S2[12] = w6h
+    S2[13] = w6l
+    S2[16] = w8h
+    S2[17] = w8l
+    S2[20] = w10h
+    S2[21] = w10l
+    S2[24] = w12h
+    S2[25] = w12l
+    S2[28] = w14h
+    S2[29] = w14l
+    S2[32] = w16h
+    S2[33] = w16l
+    S2[36] = w18h
+    S2[37] = w18l
+    S2[40] = w20h
+    S2[41] = w20l
+    S2[44] = w22h
+    S2[45] = w22l
+    var (x1h, x1l) = t2_mix(S2[2], S2[3], S2[4], S2[5], S2[0], S2[1], 2, 12, 34)
+    var (x3h, x3l) = t2_mix(S2[6], S2[7], S2[8], S2[9], S2[4], S2[5], 2, 26, 56)
+    var (x5h, x5l) = t2_mix(S2[10], S2[11], S2[12], S2[13], S2[8], S2[9], 2, 40, 14)
+    var (x7h, x7l) = t2_mix(S2[14], S2[15], S2[16], S2[17], S2[12], S2[13], 2, 54, 36)
+    var (x9h, x9l) = t2_mix(S2[18], S2[19], S2[20], S2[21], S2[16], S2[17], 2, 4, 58)
+    var (x11h, x11l) = t2_mix(S2[22], S2[23], S2[24], S2[25], S2[20], S2[21], 2, 18, 16)
+    var (x13h, x13l) = t2_mix(S2[26], S2[27], S2[28], S2[29], S2[24], S2[25], 2, 32, 38)
+    var (x15h, x15l) = t2_mix(S2[30], S2[31], S2[32], S2[33], S2[28], S2[29], 2, 46, 60)
+    var (x17h, x17l) = t2_mix(S2[34], S2[35], S2[36], S2[37], S2[32], S2[33], 2, 60, 18)
+    var (x19h, x19l) = t2_mix(S2[38], S2[39], S2[40], S2[41], S2[36], S2[37], 2, 10, 40)
+    var (x21h, x21l) = t2_mix(S2[42], S2[43], S2[44], S2[45], S2[40], S2[41], 2, 24, 62)
+    var (x23h, x23l) = t2_mix(S2[46], S2[47], S2[0], S2[1], S2[44], S2[45], 2, 38, 20)
+    S2[2] = x1h
+    S2[3] = x1l
+    S2[6] = x3h
+    S2[7] = x3l
+    S2[10] = x5h
+    S2[11] = x5l
+    S2[14] = x7h
+    S2[15] = x7l
+    S2[18] = x9h
+    S2[19] = x9l
+    S2[22] = x11h
+    S2[23] = x11l
+    S2[26] = x13h
+    S2[27] = x13l
+    S2[30] = x15h
+    S2[31] = x15l
+    S2[34] = x17h
+    S2[35] = x17l
+    S2[38] = x19h
+    S2[39] = x19l
+    S2[42] = x21h
+    S2[43] = x21l
+    S2[46] = x23h
+    S2[47] = x23l
+}
+
+// ---------------------------------------------------------------------------
+// 吸收 + 挤出
+// ---------------------------------------------------------------------------
+
+// 一个块的吸收：rate_bytes 字节 → rate_bytes/8 个子 lane（8 字节小端成字，
+//   mod-3 加进低位平面）。byte_at(k)：k < len 取消息字节，k == len 取 0x80，
+//   k > len 取 0（填充）。
+func t2_absorb(rate_lanes: i64, pos: i64, mlen: i64, plen: i64) {
+    var j: i64 = 0
+    while j < rate_lanes {
+        var w: i64 = 0
+        var i: i64 = 0
+        while i < 8 {
+            var at = pos + j * 8 + i
+            var byte: i64 = 0
+            if at < mlen {
+                byte = str_byte(G2_MSG, at)
+            } else if at == mlen {
+                byte = 128
+            } else if at >= plen - 8 {
+                // ★ 尾块最后 8 字节 = 消息字节长度（小端）——Merkle–Damgård 强化，
+                //   使同一消息在不同 rate 档下吸收态必然不同（b64/f 档位区分）
+                byte = (mlen >> ((at - (plen - 8)) * 8)) & 255
+            }
+            w = w | (byte << (i * 8))
+            i = i + 1
+        }
+        var hi = S2[2 * j]
+        var lo = S2[2 * j + 1]
+        var t = t2_add_r0(hi, lo, 0, w)
+        S2[2 * j] = t2_add_r1(hi, lo, 0, w)
+        S2[2 * j + 1] = t
+        j = j + 1
+    }
+}
+
+// 挤出光标：rate 子 lane 逐列取 trit（lane 优先），耗尽则置换一轮续挤
+func t2_next_trit(rate_lanes: i64, R: i64) -> i64 {
+    var h = (S2[2 * t2_cur_lane] >> t2_cur_col) & 1
+    var l = (S2[2 * t2_cur_lane + 1] >> t2_cur_col) & 1
+    var v = l + 2 * h
+    t2_cur_col = t2_cur_col + 1
+    if t2_cur_col == 64 {
+        t2_cur_col = 0
+        t2_cur_lane = t2_cur_lane + 1
+        if t2_cur_lane == rate_lanes {
+            t2_cur_lane = 0
+            if R == 16 {
+                t2_perm24()
+            } else if R == 12 {
+                if rate_lanes == 8 {
+                    t2_perm12()
+                } else {
+                    t2_perm4()
+                }
+            }
+        }
+    }
+    return v
+}
+
+// 挤出 n 个 48 进制符号（每 10 trit → 3 符号，高位在前）
+func t2_squeeze(rate_lanes: i64, R: i64, n: i64) -> table<i64> {
+    var out = table_new_i64()
+    var k: i64 = 0
+    while k < n {
+        var val: i64 = 0
+        var i: i64 = 0
+        while i < 10 {
+            val = val + t2_next_trit(rate_lanes, R) * t2_p3(i)
+            i = i + 1
+        }
+        table_push(out, val / 2304)
+        table_push(out, (val / 48) % 48)
+        table_push(out, val % 48)
+        k = k + 1
+    }
+    return out
+}
+
+func t2_p3(i: i64) -> i64 {
+    var v: i64 = 1
+    var k: i64 = 0
+    while k < i {
+        v = v * 3
+        k = k + 1
+    }
+    return v
+}
+
+// ---------------------------------------------------------------------------
+// 编码入口
+// ---------------------------------------------------------------------------
+
+// 吸收 + 挤出的公共路径：tier 0=r 1=f 2=b 3=x；符号表 → 目标进制字符串
+
+// θ：列奇偶扩散（Keccak θ 的三元版）——P_c = Σ_lane lane_i[c]（mod 3），
+//   lane_i += rot(P, i*3+1)。稀疏态一轮即扩散到全部 lane；N ≢ 2 (mod 3) ⇒ 可逆。
+func t2_theta(N: i64) {
+    var Ph: i64 = 0
+    var Pl: i64 = 0
+    var i: i64 = 0
+    while i < N {
+        var nh = t2_add_r1(Ph, Pl, S2[2 * i], S2[2 * i + 1])
+        var nl = t2_add_r0(Ph, Pl, S2[2 * i], S2[2 * i + 1])
+        Ph = nh
+        Pl = nl
+        i = i + 1
+    }
+    i = 0
+    while i < N {
+        var rh = t2_rotl(Ph, (i * 3 + 1) % 64)
+        var rl = t2_rotl(Pl, (i * 3 + 1) % 64)
+        var nh = t2_add_r1(S2[2 * i], S2[2 * i + 1], rh, rl)
+        var nl = t2_add_r0(S2[2 * i], S2[2 * i + 1], rh, rl)
+        S2[2 * i] = nh
+        S2[2 * i + 1] = nl
+        i = i + 1
+    }
+}
+
+func t2_run(tier: i64, msg: string, n: i64, base: i64) -> string {
+    var k: i64 = 0
+    var lanes: i64 = 4
+    var rate_lanes: i64 = 3
+    var rate_bytes: i64 = 24
+    var R: i64 = 12
+    if tier == 1 {
+        lanes = 12
+        rate_lanes = 8
+        rate_bytes = 64
+    } else if tier == 2 {
+        lanes = 12
+        rate_lanes = 6
+        rate_bytes = 48
+    } else if tier == 3 {
+        lanes = 24
+        rate_lanes = 12
+        rate_bytes = 96
+        R = 16
+    }
+    G2_MSG = msg
+    var mlen = len(msg)
+    // 状态清零
+    var q: i64 = 0
+    while q < 48 {
+        S2[q] = 0
+        q = q + 1
+    }
+    // 填充：0x80 + 补零 + 尾块末 8 字节消息长度（LE）。若 0x80 后余量不足 8 字节则加一块。
+    var plen = ((mlen + 1 + rate_bytes - 1) / rate_bytes) * rate_bytes
+    if plen - mlen < 9 {
+        plen = plen + rate_bytes
+    }
+    var pos: i64 = 0
+    while pos < plen {
+        t2_absorb(rate_lanes, pos, mlen, plen)
+        if R == 16 {
+            t2_perm24()
+        } else if rate_lanes == 8 {
+            t2_perm12()
+        } else if rate_lanes == 6 {
+            t2_perm12()
+        } else {
+            t2_perm4()
+        }
+        t2_theta(lanes)
+        pos = pos + rate_bytes
+    }
+    // 挤出 n 符号（3n 个 base48 数字，取前 n 个）；★ 光标必须复位（全局残留 ⇒ 非确定）
+    t2_cur_lane = 0
+    t2_cur_col = 0
+    var syms = t2_squeeze(rate_lanes, R, n)
+    var b = base
+    if b <= 0 {
+        b = 48
+    }
+    if b != 2 && b != 3 && b != 8 && b != 16 && b != 48 {
+        return ""
+    }
+    var out: string = ""
+    if b == 48 {
+        while k < n {
+            out = out + str_char(t2_b48, syms[k])
+            k = k + 1
+        }
+        return out
+    }
+    // 其它进制：取前 b0 = ⌊n·L48/8⌋ 个符号字节（L48 = log2(48)），走基转换
+    var b0 = (n * 698121) / 1000000
+    if b0 < 1 { b0 = 1 }
+    // 符号字节 → hex（2×b0 字符）
+    var hexd = "0123456789abcdef"
+    var hexs: string = ""
+    k = 0
+    while k < b0 {
+        var sv = syms[k]
+        hexs = hexs + str_char(hexd, sv / 16) + str_char(hexd, sv % 16)
+        k = k + 1
+    }
+    if b == 16 {
+        return hexs
+    }
+    // base 2/3/8：字节池长除基转换（同 tsha1 pad_radix 口径）
+    var pool = table_new_i64()
+    k = 0
+    while k < b0 {
+        var hi = syms[k] / 16
+        var lo2 = syms[k] % 16
+        table_push(pool, hi * 16 + lo2)
+        k = k + 1
+    }
+    var digs = table_new_i64()
+    while true {
+        var rem: i64 = 0
+        var nq = table_new_i64()
+        var allz = true
+        var j2: i64 = 0
+        while j2 < len(pool) {
+            var cur = rem * 256 + pool[j2]
+            var qq = cur / b
+            var rr = cur % b
+            if qq != 0 {
+                allz = false
+            }
+            table_push(nq, qq)
+            rem = rr
+            j2 = j2 + 1
+        }
+        table_push(digs, rem)
+        pool = nq
+        if allz {
+            break
+        }
+    }
+    // 位数目标：m = base_chars(b0, base)（同 tsha1 公式）
+    var m: i64 = 0
+    if b == 2 {
+        m = b0 * 8
+    } else if b == 3 {
+        m = (b0 * 504744 + 99999) / 100000
+    } else {
+        m = (b0 * 8 + 2) / 3
+    }
+    var dch = "0123456789abcdef"
+    var res: string = ""
+    var kk = len(digs) - 1
+    while kk >= 0 {
+        res = res + str_char(dch, digs[kk])
+        kk = kk - 1
+    }
+    while len(res) < m {
+        res = "0" + res
+    }
+    return res
+}
+
+// ---------------------------------------------------------------------------
+// 公开接口（四档；与 tsha1 同约定：n = 48 进制符号数，非法返回空串）
+// ---------------------------------------------------------------------------
+
+namespace tsha2 {
+
+pub func tsha2r(msg: string, n: i64, base: i64 = 48) -> string {
+    if n < 1 || n > 65536 { return "" }
+    return t2_run(0, msg, n, base)
+}
+
+pub func tsha2f(msg: string, n: i64, base: i64 = 48) -> string {
+    if n < 1 || n > 65536 { return "" }
+    return t2_run(1, msg, n, base)
+}
+
+pub func tsha2b(msg: string, n: i64, base: i64 = 48) -> string {
+    if n < 1 || n > 65536 { return "" }
+    return t2_run(2, msg, n, base)
+}
+
+pub func tsha2x(msg: string, n: i64, base: i64 = 48) -> string {
+    if n < 1 || n > 65536 { return "" }
+    return t2_run(3, msg, n, base)
+}
+
+} // namespace tsha2
