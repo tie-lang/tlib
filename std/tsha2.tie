@@ -141,33 +141,6 @@ func t2_tc(h: i64, l: i64, c: i64) -> (i64, i64) {
 
 
 
-// φ：Feistel 列分半（偶列 A / 奇列 B）——跨列非线性双射，own 项经 φ 后消息
-//   trit 不再加性持久（修复入库烟雾测试暴露的"值持久/短消息四档同输出"缺陷）。
-//   F(B) = B ⊗ rot2(B)：邻奇列 GF(3) 积（value-2 trit 经异列因子可传播）；
-//   (A', B') = (B, A + F(B))，Feistel 结构 ⇒ 双射无需证明。
-var T2_EV: i64 = 6148914691236517205
-
-func t2_feistel(Ph: i64, Pl: i64) -> (i64, i64) {
-    var Ah = Ph & T2_EV
-    var Al = Pl & T2_EV
-    var Bh = Ph & (T2_EV ^ (0 - 1))
-    var Bl = Pl & (T2_EV ^ (0 - 1))
-    var rh = t2_rotl(Bh, 2)
-    var rl = t2_rotl(Bl, 2)
-    var Fh = t2_mul_r1(Bh, Bl, rh, rl)
-    var Fl = t2_mul_r0(Bh, Bl, rh, rl)
-    // ★ 加常数 trit-1：抵消稀疏态下积为零的退化（F 稠密 ⇒ φ 真混合）
-    Fh = t2_add_r1(Fh, Fl, 0, 0 - 1)
-    Fl = t2_add_r0(Fh, Fl, 0, 0 - 1)
-    var F1h = t2_rotl(Fh, 1)
-    var F1l = t2_rotl(Fl, 1)
-    var A2h = t2_add_r1(Ah, Al, F1h, F1l)
-    var A2l = t2_add_r0(Ah, Al, F1h, F1l)
-    var ODM = T2_EV ^ (0 - 1)
-    var nh = (t2_rotl(Bh, 1) & T2_EV) | (t2_rotl(A2h, 63) & ODM)
-    var nl = (t2_rotl(Bl, 1) & T2_EV) | (t2_rotl(A2l, 63) & ODM)
-    return (nh, nl)
-}
 
 // ---------------------------------------------------------------------------
 // 状态与轮置换（全局状态表 S2：48 字 = 24 子 lane 上限；未用区域恒 0）
@@ -183,12 +156,10 @@ func t2_perm4() {
     S2[5] = e2l
     var (o1h, o1l) = t2_mix(S2[2], S2[3], S2[4], S2[5], S2[0], S2[1], 2, 12, 34)
     var (o3h, o3l) = t2_mix(S2[6], S2[7], S2[0], S2[1], S2[4], S2[5], 2, 26, 56)
-    var (g1h, g1l) = t2_feistel(o1h, o1l)
-    var (g3h, g3l) = t2_feistel(o3h, o3l)
-    S2[2] = g1h
-    S2[3] = g1l
-    S2[6] = g3h
-    S2[7] = g3l
+    S2[2] = o1h
+    S2[3] = o1l
+    S2[6] = o3h
+    S2[7] = o3l
 }
 
 // N=12（tsha2f / tsha2b）
