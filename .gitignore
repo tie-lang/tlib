@@ -24,3 +24,7 @@ _tmp_*
 # 本地配置与索引 / local config
 .localmemory/
 opencode.json
+# 本地草稿与探针
+_idle_*.txt
+_tlib_audit*.txt
+std/big_probe.tie
