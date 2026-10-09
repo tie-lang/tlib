@@ -5,9 +5,6 @@ type tie<class>
 //   （tsha1 因有效输出空间仅名义 83–88% 且无 XOF 已退役，保留为历史兼容读，
 //   消费方 tink_v2 等暂不迁移）。
 //
-// 设计与实测：docs/designs/tzp-format-family.md §6（tzp 格式族设计稿）
-//   探针 _tmp_tzp_probe/（tzp_fbx / tzp_xbig / tzp_xfin / tzp_ddtlat / stand_*）。
-//
 // == 结构（三进制海绵，位平面双编码）==
 //   状态 = N 子 lane × 64 列；每 trit 两个位平面（h=2、l=1，规范性 h & l == 0）。
 //   伙伴 = 双向环 (i+1)%N 与 (i−1+N)%N；更新顺序 = 偶数子 lane 先（全读旧值、
@@ -16,7 +13,7 @@ type tie<class>
 //   轮函数：lane_i ← lane_i + rot_k1( y1 × (y1 + c_i) ) + rot_k2( y2 × (y2 + c_i) )
 //     （逐 trit mod-3；乘 → 旋转 → 加）；c_i = 1+(i%2)，k1 = (i*7+5)%64，
 //     k2 = (i*11+23)%64。乘积项为 GF(3) 二次型 ⇒ planar/完美非线性：
-//     电路级 DDT 差分均匀度 1/3（理论理想）、LAT 全随机水平（tzp_ddtlat 实测）。
+//     电路级 DDT 差分均匀度 1/3（理论理想）、LAT 全随机水平（逐值实测）。
 //   吸收：消息 8 字节小端成字，mod-3 加进子 lane 低位平面。
 //   填充（Merkle–Damgård 强化）：0x80 + 补零 + 尾块末 8 字节小端消息长度；
 //     保证同一消息在不同 rate 档下吸收态必然不同（档位区分）。
@@ -481,7 +478,7 @@ func t2_run(tier: i64, msg: string, n: i64, base: i64) -> string {
     if b == 16 {
         return hexs
     }
-    // base 2/3/8：字节池长除基转换（同 tsha1 pad_radix 口径）
+    // base 2/3/8：字节池长除基转换
     var pool = table_new_i64()
     k = 0
     while k < b0 {
@@ -513,7 +510,7 @@ func t2_run(tier: i64, msg: string, n: i64, base: i64) -> string {
             break
         }
     }
-    // 位数目标：m = base_chars(b0, base)（同 tsha1 公式）
+    // 位数目标：m = base_chars(b0, base)（进制位数换算公式）
     var m: i64 = 0
     if b == 2 {
         m = b0 * 8
@@ -536,7 +533,7 @@ func t2_run(tier: i64, msg: string, n: i64, base: i64) -> string {
 }
 
 // ---------------------------------------------------------------------------
-// 公开接口（四档；与 tsha1 同约定：n = 48 进制符号数，非法返回空串）
+// 公开接口（四档：n = 48 进制符号数，非法返回空串）
 // ---------------------------------------------------------------------------
 
 namespace tsha2 {
