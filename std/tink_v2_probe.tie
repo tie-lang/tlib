@@ -13,10 +13,10 @@ import "./time.tie" as time
 
 // 跨语言 KAT 常量（首次运行由下面 println 打印实际值，固化后填回断言）。
 // 快校验：tsha2f("",8,48) 与 tsha2f("123456789",8,48) 的 8 符号 48 进制串。
-var ks_empty: string = "3Cc0000u"
-var ks_nine: string = "o18djrdv"
+var ks_empty: string = "bxGeEqjb"
+var ks_nine: string = "ayC2pw3m"
 // 强档：tsha2f("123456789",46,48) 的 46 符号 base48 串（前 32 字节 = 256 位）。
-var ks_strong: string = "o18djrdv3oJl4xzeCrb3sjvxboi8D3jrsh0p83k3E39h63"
+var ks_strong: string = "ayC2pw3m0aue21Hj5Gdhr5Cl9II03x47BmbzbqvjhE1Ael"
 
 // 全局返回码：任一 FAIL 置 1，最终 main 返回。
 var g_rc: i64 = 0
@@ -150,7 +150,7 @@ func main() -> i64 {
     var intgStr = table_new_i64()
     var ksi: i64 = len(frKS) - 32
     while ksi < len(frKS) { table_push(intgStr, frKS[ksi]); ksi = ksi + 1 }
-    expect(eqbytes(intgStr, ascii("o18djrdv3oJl4xzeCrb3sjvxboi8D3jr")), "frame_kat_strong")
+    expect(eqbytes(intgStr, ascii("ayC2pw3m0aue21Hj5Gdhr5Cl9II03x47")), "frame_kat_strong")
 
     // ---- 4) 损坏帧拒绝（翻转 payload 1 字节 → 快校验 integrity_ok=0） ----
     var frT = t2.frame_encode(pA, 0, table_new_i64())
