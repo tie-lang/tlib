@@ -2138,4 +2138,227 @@ pub func hub_fanout(patterns: table<string>, sp: table<string>, topic: string) -
     return out
 }
 
+// ==================== RPC（§4.5/§7）与错误码注册表（§4.7 全量） ====================
+// REQUEST（0x40）：req_id u64 + flags u8 + service(u8 长) + method(u8 长) + payload
+//   flags bit0 = idempotent（early data 许可，§6.5；判读用 eo_allowed）。
+// RESPONSE（0x41）：req_id u64 + status u32 + payload（status = 错误码注册表）。
+// CANCEL（0x42）：req_id u64（幂等；已取消 req_id 的 RESPONSE 到达即丢弃）。
+// PUSH（0x43）：req_id u64 + payload（双向流式 RPC 服务端推送；同 REQ_ID 关联）。
+// hub 只做路由（不解析 payload）；deadline/cancel 在 hub 侧透传（不代答）。
+
+// ---- 错误码注册表（§4.7 全量；码值随规范发布） ----
+// 0x01xx 传输 / 0x02xx 会话 / 0x03xx 安全 / 0x04xx 总线 / 0x05xx 内容 / 0x06xx 中继；
+// 0x07xx–0x0Fxx 预留；0x10xx+ 应用自定义。
+
+pub func err_frame_malformed() -> i64 { return 0x0101 }
+pub func err_stream_state() -> i64 { return 0x0102 }
+pub func err_flow_control() -> i64 { return 0x0103 }
+pub func err_deadline_exceeded() -> i64 { return 0x0105 }
+pub func err_version_unsupported() -> i64 { return 0x0201 }
+pub func err_suite_unsupported() -> i64 { return 0x0202 }
+pub func err_protocol_violation() -> i64 { return 0x0203 }
+pub func err_stream_limit() -> i64 { return 0x0204 }
+pub func err_session_closing() -> i64 { return 0x0205 }
+pub func err_handshake_failed() -> i64 { return 0x0301 }
+pub func err_auth_failed() -> i64 { return 0x0302 }
+pub func err_aead_tag_failed() -> i64 { return 0x0303 }
+pub func err_replay() -> i64 { return 0x0304 }
+pub func err_key_update() -> i64 { return 0x0305 }
+pub func err_ticket_invalid() -> i64 { return 0x0306 }
+pub func err_no_route() -> i64 { return 0x0401 }
+pub func err_topic_invalid() -> i64 { return 0x0402 }
+pub func err_sub_limit() -> i64 { return 0x0403 }
+pub func err_not_held() -> i64 { return 0x0501 }
+pub func err_verify_failed() -> i64 { return 0x0502 }
+pub func err_range_invalid() -> i64 { return 0x0503 }
+pub func err_algo_unsupported() -> i64 { return 0x0504 }
+pub func err_target_unreachable() -> i64 { return 0x0601 }
+pub func err_forward_refused() -> i64 { return 0x0602 }
+
+pub func err_class_of(ec: i64) -> i64 {
+    if ec == 0 { return 0 }
+    return ec & 0xFF00
+}
+
+pub func err_name(ec: i64) -> string {
+    if ec == 0x0000 { return "OK" }
+    if ec == 0x0101 { return "FRAME_MALFORMED" }
+    if ec == 0x0102 { return "STREAM_STATE" }
+    if ec == 0x0103 { return "FLOW_CONTROL_ERROR" }
+    if ec == 0x0104 { return "TIMEOUT" }
+    if ec == 0x0105 { return "DEADLINE_EXCEEDED" }
+    if ec == 0x0201 { return "VERSION_UNSUPPORTED" }
+    if ec == 0x0202 { return "SUITE_UNSUPPORTED" }
+    if ec == 0x0203 { return "PROTOCOL_VIOLATION" }
+    if ec == 0x0204 { return "STREAM_LIMIT" }
+    if ec == 0x0205 { return "SESSION_CLOSING" }
+    if ec == 0x0301 { return "HANDSHAKE_FAILED" }
+    if ec == 0x0302 { return "AUTH_FAILED" }
+    if ec == 0x0303 { return "AEAD_TAG_FAILED" }
+    if ec == 0x0304 { return "REPLAY" }
+    if ec == 0x0305 { return "KEY_UPDATE_ERROR" }
+    if ec == 0x0306 { return "TICKET_INVALID" }
+    if ec == 0x0401 { return "NO_ROUTE" }
+    if ec == 0x0402 { return "TOPIC_INVALID" }
+    if ec == 0x0403 { return "SUBSCRIPTION_LIMIT" }
+    if ec == 0x0501 { return "NOT_HELD" }
+    if ec == 0x0502 { return "VERIFY_FAILED" }
+    if ec == 0x0503 { return "RANGE_INVALID" }
+    if ec == 0x0504 { return "ALGO_UNSUPPORTED" }
+    if ec == 0x0601 { return "TARGET_UNREACHABLE" }
+    if ec == 0x0602 { return "FORWARD_REFUSED" }
+    return "UNKNOWN"
+}
+
+// ---- RPC 编解码 ----
+
+pub func req_body(req_id: i64, flags: i64, service: string, method: string, payload: table<i64>) -> table<i64> {
+    var sb = name_body(service)
+    var mb = name_body(method)
+    if len(sb) == 0 || len(mb) == 0 { return table_new_i64() }
+    var fb = table_new_i64()
+    table_push(fb, flags & 0xFF)
+    var out = bytes.concat(bytes.to_u64_be(req_id), fb)
+    out = bytes.concat(out, bytes.concat(sb, mb))
+    return bytes.concat(out, payload)
+}
+
+// → (ok, req_id, flags, service, method, p_off, p_len)
+pub func req_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, string, string, i64, i64) {
+    if off < 0 || n < 10 || off + n > len(b) { return (0, 0, 0, "", "", 0, 0) }
+    var req_id = bytes.from_u64_be(b, off)
+    var flags = b[off + 8] & 0xFF
+    var p = off + 9
+    var end = off + n
+    var sl = b[p] & 0xFF
+    if p + 1 + sl > end { return (0, 0, 0, "", "", 0, 0) }
+    var svc = bytes.to_ascii(bytes.slice(b, p + 1, p + 1 + sl))
+    p = p + 1 + sl
+    if p + 1 > end { return (0, 0, 0, "", "", 0, 0) }
+    var ml = b[p] & 0xFF
+    if p + 1 + ml > end { return (0, 0, 0, "", "", 0, 0) }
+    var mth = bytes.to_ascii(bytes.slice(b, p + 1, p + 1 + ml))
+    p = p + 1 + ml
+    return (1, req_id, flags, svc, mth, p, end - p)
+}
+
+pub func request_frame(stream_id: i64, seq: i64, req_id: i64, flags: i64, service: string, method: string, payload: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_request(), prot, stream_id, seq, req_body(req_id, flags, service, method, payload), table_new_i64())
+}
+
+pub func resp_body(req_id: i64, status: i64, payload: table<i64>) -> table<i64> {
+    return bytes.concat(bytes.concat(bytes.to_u64_be(req_id), bytes.to_u32_be(status)), payload)
+}
+
+// → (ok, req_id, status, p_off, p_len)
+pub func resp_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64, i64) {
+    if off < 0 || n < 12 || off + n > len(b) { return (0, 0, 0, 0, 0) }
+    return (1, bytes.from_u64_be(b, off), bytes.from_u32_be(b, off + 8), off + 12, n - 12)
+}
+
+pub func response_frame(stream_id: i64, seq: i64, req_id: i64, status: i64, payload: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_response(), prot, stream_id, seq, resp_body(req_id, status, payload), table_new_i64())
+}
+
+pub func cancel_body(req_id: i64) -> table<i64> {
+    return bytes.to_u64_be(req_id)
+}
+
+pub func cancel_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64) {
+    if off < 0 || n < 8 || off + n > len(b) { return (0, 0) }
+    return (1, bytes.from_u64_be(b, off))
+}
+
+pub func cancel_frame(stream_id: i64, seq: i64, req_id: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_cancel(), prot, stream_id, seq, cancel_body(req_id), table_new_i64())
+}
+
+pub func push_body(req_id: i64, payload: table<i64>) -> table<i64> {
+    return bytes.concat(bytes.to_u64_be(req_id), payload)
+}
+
+// → (ok, req_id, p_off, p_len)
+pub func push_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64) {
+    if off < 0 || n < 8 || off + n > len(b) { return (0, 0, 0, 0) }
+    return (1, bytes.from_u64_be(b, off), off + 8, n - 8)
+}
+
+pub func push_frame(stream_id: i64, seq: i64, req_id: i64, payload: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_push(), prot, stream_id, seq, push_body(req_id, payload), table_new_i64())
+}
+
+// ---- 请求登记（deadline/cancel 时序） ----
+// st = [count, 记录 × 步长 3：[req_id, deadline_ms, state]]；state：0 待答 / 1 已取消 / 2 完成
+
+pub func rpc_new() -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, 0)
+    return st
+}
+
+func rpc_find(st: table<i64>, req_id: i64) -> i64 {
+    var c = st[0]
+    var i: i64 = 0
+    while i < c {
+        if st[1 + i * 3] == req_id { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// → 1 已登记 / 0 重复（保持原状）
+pub func rpc_track(ref st: table<i64>, req_id: i64, deadline_ms: i64) -> i64 {
+    if rpc_find(st, req_id) >= 0 { return 0 }
+    st[0] = st[0] + 1
+    table_push(st, req_id)
+    table_push(st, deadline_ms)
+    table_push(st, 0)
+    return 1
+}
+
+pub func rpc_state(st: table<i64>, req_id: i64) -> i64 {
+    var k = rpc_find(st, req_id)
+    if k < 0 { return -1 }
+    return st[1 + k * 3 + 2]
+}
+
+// 取消：幂等（重复取消不再变更）→ 1 本次标记 / 0 未标记（未知或非待答）
+pub func rpc_cancel(ref st: table<i64>, req_id: i64) -> i64 {
+    var k = rpc_find(st, req_id)
+    if k < 0 { return 0 }
+    if st[1 + k * 3 + 2] != 0 { return 0 }
+    st[1 + k * 3 + 2] = 1
+    return 1
+}
+
+// 应答到达：1 交付 / 0 丢弃（已取消或已完成）/ -1 未知
+pub func rpc_accept_response(ref st: table<i64>, req_id: i64) -> i64 {
+    var k = rpc_find(st, req_id)
+    if k < 0 { return -1 }
+    if st[1 + k * 3 + 2] == 0 {
+        st[1 + k * 3 + 2] = 2
+        return 1
+    }
+    return 0
+}
+
+// 超期扫描：标记完成并返回超期待答 req_id 列表（deadline 0 = 无期限，跳过）
+pub func rpc_expire(ref st: table<i64>, now_ms: i64) -> table<i64> {
+    var out = table_new_i64()
+    var c = st[0]
+    var i: i64 = 0
+    while i < c {
+        var base = 1 + i * 3
+        if st[base + 2] == 0 {
+            var dl = st[base + 1]
+            if dl > 0 && now_ms > dl {
+                st[base + 2] = 2
+                table_push(out, st[base])
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
 }   // namespace tink3
