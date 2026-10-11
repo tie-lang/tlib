@@ -777,4 +777,317 @@ pub func datagram_frame(payload: table<i64>, stream_id: i64, seq: i64, prot: i64
     return frame_encode(ft_datagram(), prot, stream_id, seq, payload, table_new_i64())
 }
 
+// ==================== 可靠传输（§5.3） ====================
+// 每流独立：seq u32 单调 +1；接收端重排 + 范围 ACK（largest/delay/count + gap/range 对）；
+// 发送端重发缓冲 + RTO 指数退避（初值 333ms、每次 ×2、上限 8s；均可调）；
+// 「重传 = 原帧重发（幂等）」；连续 5 次重传仍超时 → RESET_STREAM(code = 0x0104 TIMEOUT)。
+// ACK 策略：每 2 帧或 25ms 至少一 ACK（自适应）。
+// 状态 = 可写穿表（ref 参数）：
+//   rx 状态 [next_expect, pending_since_ack, last_ack_ms]；接收集 got 由调用方持有
+//     （append-only，乱序持有，不压缩；含 [next_expect, ∞) 内已收 seq）
+//   tx 状态 [base, next, rto0, cap]；重发缓冲 sbuf；段表 segs 步长 5：
+//     [seq, boff, blen, lastms, rets]；blen == -1 → 已释放（已确认）；
+//     lastms == -1 → 从未发送
+// 语义纪律：所有可靠性状态是每流的；连接控制流（stream 0）用同一机制（控制消息不丢）。
+
+// ---------- 范围 ACK 编解码 ----------
+// body：largest u32 + delay u16 + count u8 + (gap u16, range u16) × count
+// 覆盖语义（钉死为 KAT）：第 0 对 gap 恒 0；run_0 覆盖 [largest − range_0 + 1, largest]；
+// 其后 run_i 的最高位 = run_{i−1} 最低位 − 1 − gap_i。
+
+// 建 ACK body：gaps/ranges 等长（1..255 对），gaps[0] 须为 0；入参不合法 → 空表
+pub func ack_build(largest: i64, delay: i64, gaps: table<i64>, ranges: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    var cnt = len(ranges)
+    if cnt < 1 || cnt > 255 || len(gaps) != cnt { return out }
+    table_push(out, (largest >> 24) & 0xFF)
+    table_push(out, (largest >> 16) & 0xFF)
+    table_push(out, (largest >> 8) & 0xFF)
+    table_push(out, largest & 0xFF)
+    table_push(out, (delay >> 8) & 0xFF)
+    table_push(out, delay & 0xFF)
+    table_push(out, cnt & 0xFF)
+    var i: i64 = 0
+    while i < cnt {
+        var g = gaps[i]
+        var r = ranges[i]
+        table_push(out, (g >> 8) & 0xFF)
+        table_push(out, g & 0xFF)
+        table_push(out, (r >> 8) & 0xFF)
+        table_push(out, r & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// 解 ACK body → (ok, largest, delay, gaps, ranges)；长度须恰为 7 + count×4
+pub func ack_parse(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, table<i64>, table<i64>) {
+    var gaps = table_new_i64()
+    var ranges = table_new_i64()
+    if off < 0 || n < 7 || off + n > len(b) { return (0, 0, 0, gaps, ranges) }
+    var cnt = b[off + 6] & 0xFF
+    if n != 7 + cnt * 4 { return (0, 0, 0, gaps, ranges) }
+    var largest = bytes.from_u32_be(b, off)
+    var delay = bytes.from_u16_be(b, off + 4)
+    var i: i64 = 0
+    while i < cnt {
+        var p = off + 7 + i * 4
+        table_push(gaps, bytes.from_u16_be(b, p))
+        table_push(ranges, bytes.from_u16_be(b, p + 2))
+        i = i + 1
+    }
+    return (1, largest, delay, gaps, ranges)
+}
+
+// seq 是否被该 ACK 覆盖（1/0；结构坏/无范围 → 保守 0）
+pub func ack_covers(largest: i64, gaps: table<i64>, ranges: table<i64>, seq: i64) -> i64 {
+    if largest < 0 { return 0 }
+    var n = len(ranges)
+    if n < 1 { return 0 }
+    var hi = largest
+    var i: i64 = 0
+    while i < n {
+        var rl = ranges[i]
+        if rl <= 0 { return 0 }
+        var lo = hi - rl + 1
+        if seq >= lo && seq <= hi { return 1 }
+        if i + 1 < n {
+            var g = gaps[i + 1]
+            if g < 0 { return 0 }
+            hi = lo - 1 - g
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// 由接收集（任意序、容忍重复）反推范围 → (largest, gaps, ranges)；空集 → (-1, 空, 空)
+pub func ack_ranges_from(seqs: table<i64>) -> (i64, table<i64>, table<i64>) {
+    var gaps = table_new_i64()
+    var ranges = table_new_i64()
+    var n = len(seqs)
+    if n == 0 { return (-1, gaps, ranges) }
+    var idx = frag_order(seqs)
+    var largest = seqs[idx[n - 1]]
+    table_push(gaps, 0)
+    var hi = largest
+    var lo = largest
+    var i = n - 2
+    while i >= 0 {
+        var v = seqs[idx[i]]
+        if v >= lo {
+            i = i - 1
+        } else if v == lo - 1 {
+            lo = v
+            i = i - 1
+        } else {
+            table_push(ranges, hi - lo + 1)
+            table_push(gaps, lo - v - 1)
+            hi = v
+            lo = v
+            i = i - 1
+        }
+    }
+    table_push(ranges, hi - lo + 1)
+    return (largest, gaps, ranges)
+}
+
+// ACK 帧（body 装入 ft_ack）
+pub func ack_frame(stream_id: i64, seq: i64, largest: i64, delay: i64, gaps: table<i64>, ranges: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_ack(), prot, stream_id, seq, ack_build(largest, delay, gaps, ranges), table_new_i64())
+}
+
+// ---------- 接收端（重排 + ACK 策略） ----------
+
+// 新接收状态：[next_expect, pending_since_ack, last_ack_ms]
+pub func rx_new() -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, 0)
+    table_push(st, 0)
+    table_push(st, 0)
+    return st
+}
+
+// 收一帧 seq → 1 = 接受（首次）/ 0 = 重复或过旧（丢弃；计数由调用方）
+pub func rx_push(ref st: table<i64>, ref got: table<i64>, seq: i64) -> i64 {
+    if seq < st[0] { return 0 }
+    if seq == st[0] {
+        st[0] = st[0] + 1
+        st[1] = st[1] + 1
+        var advanced: bool = true
+        while advanced {
+            advanced = false
+            var i: i64 = 0
+            while i < len(got) {
+                if got[i] == st[0] {
+                    st[0] = st[0] + 1
+                    advanced = true
+                }
+                i = i + 1
+            }
+        }
+        return 1
+    }
+    var i2: i64 = 0
+    while i2 < len(got) {
+        if got[i2] == seq { return 0 }
+        i2 = i2 + 1
+    }
+    table_push(got, seq)
+    st[1] = st[1] + 1
+    return 1
+}
+
+// ACK 是否到期：每 2 帧，或 1 帧后 25ms（自适应）
+pub func rx_ack_due(st: table<i64>, now_ms: i64) -> i64 {
+    if st[1] >= 2 { return 1 }
+    if st[1] >= 1 && now_ms - st[2] >= 25 { return 1 }
+    return 0
+}
+
+// 构建 ACK body（清 pending、更新 last_ack_ms）；无可确认 → 空表
+// 参考实现：合并集 = [0, next) ∪ got（O(收到集)；量产可增量维护范围表）
+pub func rx_ack_build(ref st: table<i64>, got: table<i64>, delay: i64, now_ms: i64) -> table<i64> {
+    var all = table_new_i64()
+    var k: i64 = 0
+    while k < st[0] {
+        table_push(all, k)
+        k = k + 1
+    }
+    var i: i64 = 0
+    while i < len(got) {
+        table_push(all, got[i])
+        i = i + 1
+    }
+    var (largest, gaps, ranges) = ack_ranges_from(all)
+    st[1] = 0
+    st[2] = now_ms
+    if largest < 0 { return table_new_i64() }
+    return ack_build(largest, delay, gaps, ranges)
+}
+
+// ---------- 发送端（重发缓冲 + RTO） ----------
+
+// 新发送状态：[base, next, rto0, cap]
+pub func tx_new(rto0: i64, cap: i64) -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, 0)
+    table_push(st, 0)
+    table_push(st, rto0)
+    table_push(st, cap)
+    return st
+}
+
+pub func tx_next_seq(st: table<i64>) -> i64 { return st[1] }
+
+// 入队一帧（seq 自动分配；帧字节追加进 sbuf；lastms = -1 未发送）
+pub func tx_push(ref st: table<i64>, ref sbuf: table<i64>, ref segs: table<i64>, frame: table<i64>) {
+    var sq = st[1]
+    var bo = len(sbuf)
+    var bl = len(frame)
+    var i: i64 = 0
+    while i < bl {
+        table_push(sbuf, frame[i] & 0xFF)
+        i = i + 1
+    }
+    table_push(segs, sq)
+    table_push(segs, bo)
+    table_push(segs, bl)
+    table_push(segs, -1)
+    table_push(segs, 0)
+    st[1] = st[1] + 1
+}
+
+// 取出需发送（首发或到期重传）的帧（拼接）→ (frames, exhausted)
+// exhausted = 1：存在段连续 5 次重传仍超时（调用方应发 RESET_STREAM(0x0104) 终止该流）
+// 副作用：标记发送时刻 / 递增重传计数；已释放段（blen = -1）跳过
+pub func tx_collect_due(ref st: table<i64>, ref segs: table<i64>, sbuf: table<i64>, now_ms: i64) -> (table<i64>, i64) {
+    var out = table_new_i64()
+    var exhausted: i64 = 0
+    var nseg = len(segs) / 5
+    var k: i64 = 0
+    while k < nseg {
+        var p = k * 5
+        var blen = segs[p + 2]
+        if blen >= 0 {
+            var due: i64 = 0
+            var rets = segs[p + 4]
+            if segs[p + 3] < 0 {
+                due = 1
+            } else {
+                var eff = st[2] << rets
+                if eff > st[3] { eff = st[3] }
+                if now_ms - segs[p + 3] >= eff { due = 1 }
+            }
+            if due == 1 {
+                if segs[p + 3] >= 0 && rets >= 5 {
+                    exhausted = 1
+                } else {
+                    if segs[p + 3] >= 0 { segs[p + 4] = rets + 1 }
+                    segs[p + 3] = now_ms
+                    var bo = segs[p + 1]
+                    var i: i64 = 0
+                    while i < blen {
+                        table_push(out, sbuf[bo + i] & 0xFF)
+                        i = i + 1
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return (out, exhausted)
+}
+
+// 收 ACK：释放已确认段（blen = -1）→ 返回释放计数；推进 base 至最小未释放 seq
+pub func tx_on_ack(ref st: table<i64>, ref segs: table<i64>, largest: i64, gaps: table<i64>, ranges: table<i64>) -> i64 {
+    var freed: i64 = 0
+    var nseg = len(segs) / 5
+    var k: i64 = 0
+    while k < nseg {
+        var p = k * 5
+        if segs[p + 2] >= 0 {
+            if ack_covers(largest, gaps, ranges, segs[p]) == 1 {
+                segs[p + 2] = -1
+                freed = freed + 1
+            }
+        }
+        k = k + 1
+    }
+    var b = st[0]
+    var advanced: bool = true
+    while advanced {
+        advanced = false
+        k = 0
+        while k < nseg {
+            var p2 = k * 5
+            if segs[p2] == b && segs[p2 + 2] == -1 {
+                b = b + 1
+                advanced = true
+            }
+            k = k + 1
+        }
+    }
+    st[0] = b
+    return freed
+}
+
+// 尚有在途段数（未释放段计数）
+pub func tx_inflight(segs: table<i64>) -> i64 {
+    var nseg = len(segs) / 5
+    var c: i64 = 0
+    var k: i64 = 0
+    while k < nseg {
+        if segs[k * 5 + 2] >= 0 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+// 全部确认？（base == next）
+pub func tx_done(st: table<i64>) -> i64 {
+    if st[0] == st[1] { return 1 }
+    return 0
+}
+
 }   // namespace tink3

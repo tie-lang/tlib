@@ -1,0 +1,299 @@
+type tie<logic>
+// std/tink_v3_rlt_probe.tie —— tink v3 可靠传输探针（设计文档 §5.3 验收）
+// 覆盖：ACK 范围编解码（字节级 KAT + 覆盖语义 + 反推）；接收端重排/重复丢弃/
+//   前推消费/ACK 策略（2 帧或 25ms）；发送端确定性丢包注入（全达 + 尝试计数）；
+//   RTO 退避序列（0/333/999/2331/4995/10323）与 5 次重传耗尽 → RESET(0x0104)；
+//   控制流可靠（丢一次仍必达）；ACK 帧封装往返。
+// 每项 PASS 打 `tinkv3r:<name>:OK`；失败 `tinkv3r:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3r:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3r:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3r:" + name + ":OK")
+    }
+}
+
+func eqbytes(a: table<i64>, b: table<i64>) -> bool {
+    if len(a) != len(b) { return false }
+    var i: i64 = 0
+    while i < len(a) {
+        if (a[i] & 0xFF) != (b[i] & 0xFF) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+
+    // ---- 1) ACK body 字节级 KAT（largest=9, delay=0, (0,2),(1,3)） ----
+    var g1 = table_new_i64()
+    table_push(g1, 0)
+    table_push(g1, 1)
+    var r1 = table_new_i64()
+    table_push(r1, 2)
+    table_push(r1, 3)
+    var ab = t3.ack_build(9, 0, g1, r1)
+    var exp1 = table_new_i64()
+    table_push(exp1, 0)
+    table_push(exp1, 0)
+    table_push(exp1, 0)
+    table_push(exp1, 9)
+    table_push(exp1, 0)
+    table_push(exp1, 0)
+    table_push(exp1, 2)
+    table_push(exp1, 0)
+    table_push(exp1, 0)
+    table_push(exp1, 0)
+    table_push(exp1, 2)
+    table_push(exp1, 0)
+    table_push(exp1, 1)
+    table_push(exp1, 0)
+    table_push(exp1, 3)
+    expect(eqbytes(ab, exp1) && len(ab) == 15, "ack_build_bytes")
+    expect(len(t3.ack_build(9, 0, g1, empty)) == 0, "ack_build_bad_args")
+
+    // ---- 2) ACK 解析往返 / 拒绝 ----
+    var (pa0, pa1, pa2, pa3, pa4) = t3.ack_parse(ab, 0, len(ab))
+    expect(pa0 == 1 && pa1 == 9 && pa2 == 0 && len(pa3) == 2 && pa3[1] == 1 && pa4[0] == 2 && pa4[1] == 3, "ack_parse_roundtrip")
+    var (qb0, qb1, qb2, qb3, qb4) = t3.ack_parse(ab, 0, 6)
+    expect(qb0 == 0, "ack_parse_short")
+    var (rc0, rc1, rc2, rc3, rc4) = t3.ack_parse(ab, 0, len(ab) - 1)
+    expect(rc0 == 0, "ack_parse_len_mismatch")
+
+    // ---- 3) 覆盖语义（run0 = [8,9]；gap1 = 1 → run1 = [4,6]） ----
+    expect(t3.ack_covers(9, g1, r1, 8) == 1 && t3.ack_covers(9, g1, r1, 9) == 1, "ack_covers_run0")
+    expect(t3.ack_covers(9, g1, r1, 4) == 1 && t3.ack_covers(9, g1, r1, 5) == 1 && t3.ack_covers(9, g1, r1, 6) == 1, "ack_covers_run1")
+    expect(t3.ack_covers(9, g1, r1, 7) == 0 && t3.ack_covers(9, g1, r1, 3) == 0 && t3.ack_covers(9, g1, r1, 10) == 0, "ack_covers_miss")
+    var gs = table_new_i64()
+    table_push(gs, 0)
+    var rs = table_new_i64()
+    table_push(rs, 1)
+    expect(t3.ack_covers(5, gs, rs, 5) == 1 && t3.ack_covers(5, gs, rs, 4) == 0, "ack_covers_single")
+    expect(t3.ack_covers(-1, gs, rs, 0) == 0, "ack_covers_none")
+
+    // ---- 4) 反推范围 ----
+    var s01 = table_new_i64()
+    table_push(s01, 0)
+    var (f0, fg, fr) = t3.ack_ranges_from(s01)
+    expect(f0 == 0 && len(fg) == 1 && fr[0] == 1, "ranges_one")
+    var s0124 = table_new_i64()
+    table_push(s0124, 0)
+    table_push(s0124, 1)
+    table_push(s0124, 2)
+    table_push(s0124, 4)
+    var (h0, hg, hr) = t3.ack_ranges_from(s0124)
+    expect(h0 == 4 && hg[1] == 1 && hr[0] == 1 && hr[1] == 3, "ranges_gap1")
+    var s9845 = table_new_i64()
+    table_push(s9845, 9)
+    table_push(s9845, 8)
+    table_push(s9845, 4)
+    table_push(s9845, 5)
+    var (i0, ig, ir) = t3.ack_ranges_from(s9845)
+    expect(i0 == 9 && ig[1] == 2 && ir[0] == 2 && ir[1] == 2, "ranges_gap2")
+    var s332 = table_new_i64()
+    table_push(s332, 3)
+    table_push(s332, 3)
+    table_push(s332, 2)
+    var (k0, kg, kr) = t3.ack_ranges_from(s332)
+    expect(k0 == 3 && len(kg) == 1 && kr[0] == 2, "ranges_dedupe")
+    var (l0, lg, lr) = t3.ack_ranges_from(empty)
+    expect(l0 == -1, "ranges_empty")
+    var ab2 = t3.ack_build(h0, 0, hg, hr)
+    var (m0, m1, m2, m3, m4) = t3.ack_parse(ab2, 0, len(ab2))
+    expect(m0 == 1 && t3.ack_covers(m1, m3, m4, 4) == 1 && t3.ack_covers(m1, m3, m4, 0) == 1 && t3.ack_covers(m1, m3, m4, 3) == 0, "ranges_roundtrip")
+
+    // ---- 5) 接收引擎（乱序 / 去重 / 前推 / 策略） ----
+    var st5 = t3.rx_new()
+    var got5 = table_new_i64()
+    expect(t3.rx_push(st5, got5, 0) == 1, "rx_accept_seq0")
+    expect(t3.rx_push(st5, got5, 2) == 1 && t3.rx_push(st5, got5, 3) == 1, "rx_outoforder")
+    expect(t3.rx_push(st5, got5, 2) == 0, "rx_dup_drop")
+    expect(t3.rx_push(st5, got5, 1) == 1, "rx_pull_forward")
+    expect(st5[0] == 4 && t3.rx_push(st5, got5, 3) == 0, "rx_after_forward")
+    expect(t3.rx_ack_due(st5, 0) == 1, "rx_due_by_count")
+    var ab5 = t3.rx_ack_build(st5, got5, 0, 100)
+    var (n0, n1, n2, n3, n4) = t3.ack_parse(ab5, 0, len(ab5))
+    expect(n0 == 1 && n1 == 3 && n4[0] == 4, "rx_ack_full_run")
+    expect(t3.rx_ack_due(st5, 110) == 0, "rx_not_due_after_ack")
+    expect(t3.rx_push(st5, got5, 4) == 1 && t3.rx_ack_due(st5, 110) == 0 && t3.rx_ack_due(st5, 130) == 1, "rx_due_by_time")
+
+    // ---- 6) 空洞 ACK ----
+    var st6 = t3.rx_new()
+    var got6 = table_new_i64()
+    t3.rx_push(st6, got6, 0)
+    t3.rx_push(st6, got6, 2)
+    t3.rx_push(st6, got6, 4)
+    var ab6 = t3.rx_ack_build(st6, got6, 5, 900)
+    var (p6a, p6b, p6c, p6d, p6e) = t3.ack_parse(ab6, 0, len(ab6))
+    expect(p6a == 1 && p6b == 4 && p6c == 5 && len(p6e) == 3 && p6d[1] == 1 && p6d[2] == 1, "rx_gap_ack")
+    expect(t3.ack_covers(p6b, p6d, p6e, 0) == 1 && t3.ack_covers(p6b, p6d, p6e, 2) == 1 && t3.ack_covers(p6b, p6d, p6e, 4) == 1, "rx_gap_covers_hit")
+    expect(t3.ack_covers(p6b, p6d, p6e, 1) == 0 && t3.ack_covers(p6b, p6d, p6e, 3) == 0 && t3.ack_covers(p6b, p6d, p6e, 5) == 0, "rx_gap_covers_miss")
+
+    // ---- 7) 丢包注入模拟（seq1 丢 1 次；seq2 丢 2 次；seq5 丢 1 次 → 全达） ----
+    var st7 = t3.tx_new(333, 8000)
+    var sbuf7 = table_new_i64()
+    var segs7 = table_new_i64()
+    var ii: i64 = 0
+    while ii < 6 {
+        var fr = t3.msg_frame(pat(20 + ii), 1, t3.tx_next_seq(st7), crc)
+        t3.tx_push(st7, sbuf7, segs7, fr)
+        ii = ii + 1
+    }
+    var rx7 = t3.rx_new()
+    var got7 = table_new_i64()
+    var att7 = table_new_i64()
+    ii = 0
+    while ii < 6 {
+        table_push(att7, 0)
+        ii = ii + 1
+    }
+    var tnow: i64 = 0
+    var round: i64 = 0
+    while round < 12 {
+        var (due7, ex7) = t3.tx_collect_due(st7, segs7, sbuf7, tnow)
+        var pos7: i64 = 0
+        while pos7 < len(due7) {
+            var (v0z, v1z, v2z, v3z, v4z, v5z, v6z, v7z, v8z, v9z, v10z) = t3.frame_view(due7, pos7)
+            var sq7 = v4z
+            att7[sq7] = att7[sq7] + 1
+            var drop: bool = false
+            if sq7 == 1 && att7[1] == 1 { drop = true }
+            if sq7 == 2 && att7[2] <= 2 { drop = true }
+            if sq7 == 5 && att7[5] == 1 { drop = true }
+            if !drop {
+                t3.rx_push(rx7, got7, sq7)
+            }
+            pos7 = v10z
+        }
+        if t3.rx_ack_due(rx7, tnow) == 1 {
+            var ab7 = t3.rx_ack_build(rx7, got7, 0, tnow)
+            if len(ab7) > 0 {
+                var (w0, w1, w2, w3, w4) = t3.ack_parse(ab7, 0, len(ab7))
+                t3.tx_on_ack(st7, segs7, w1, w3, w4)
+            }
+        }
+        if t3.tx_done(st7) == 1 {
+            round = 100
+        } else {
+            tnow = tnow + 200
+            round = round + 1
+        }
+    }
+    expect(t3.tx_done(st7) == 1, "sim_delivered")
+    expect(rx7[0] == 6, "sim_rx_complete")
+    expect(att7[0] == 1 && att7[1] == 2 && att7[2] == 3 && att7[3] == 1 && att7[4] == 1 && att7[5] == 2, "sim_attempts")
+
+    // ---- 8) RTO 退避序列与耗尽 → RESET(0x0104) ----
+    var st8 = t3.tx_new(333, 8000)
+    var sbuf8 = table_new_i64()
+    var segs8 = table_new_i64()
+    var f8 = t3.msg_frame(pat(8), 1, 0, crc)
+    t3.tx_push(st8, sbuf8, segs8, f8)
+    var sends: i64 = 0
+    var sendtimes = table_new_i64()
+    var tt = table_new_i64()
+    table_push(tt, 0)
+    table_push(tt, 100)
+    table_push(tt, 333)
+    table_push(tt, 999)
+    table_push(tt, 2331)
+    table_push(tt, 4995)
+    table_push(tt, 10323)
+    table_push(tt, 18323)
+    var ti: i64 = 0
+    var exh8: i64 = 0
+    while ti < 8 {
+        var (d8, e8) = t3.tx_collect_due(st8, segs8, sbuf8, tt[ti])
+        if len(d8) > 0 {
+            sends = sends + 1
+            table_push(sendtimes, tt[ti])
+        }
+        if e8 == 1 { exh8 = tt[ti] }
+        ti = ti + 1
+    }
+    expect(sends == 6 && sendtimes[0] == 0 && sendtimes[1] == 333 && sendtimes[2] == 999 && sendtimes[3] == 2331 && sendtimes[4] == 4995 && sendtimes[5] == 10323, "rto_backoff_times")
+    expect(exh8 == 18323 && t3.tx_done(st8) == 0, "rto_exhausted")
+    var rf8 = t3.reset_frame(1, 0, t3.err_timeout(), crc)
+    var (x0, x1, x2, x3v, x4, x5, x6, x7, x8, x9, x10) = t3.frame_view(rf8, 0)
+    expect(x0 == 1 && x1 == t3.ft_reset_stream() && t3.code_of(rf8, x5, x6) == 0x0104, "reset_on_timeout")
+
+    // ---- 9) 控制流可靠（seq0 丢 1 次仍必达） ----
+    var st9 = t3.tx_new(333, 8000)
+    var sbuf9 = table_new_i64()
+    var segs9 = table_new_i64()
+    var c0f = t3.ping_frame(0, 0, 7, crc)
+    var c1f = t3.ping_frame(0, 1, 8, crc)
+    t3.tx_push(st9, sbuf9, segs9, c0f)
+    t3.tx_push(st9, sbuf9, segs9, c1f)
+    var rx9 = t3.rx_new()
+    var got9 = table_new_i64()
+    var att9 = table_new_i64()
+    table_push(att9, 0)
+    table_push(att9, 0)
+    var r9: i64 = 0
+    var tn9: i64 = 0
+    while r9 < 8 {
+        var (d9, e9) = t3.tx_collect_due(st9, segs9, sbuf9, tn9)
+        var p9: i64 = 0
+        while p9 < len(d9) {
+            var (y0, y1, y2, y3, y4, y5, y6, y7, y8, y9, y10) = t3.frame_view(d9, p9)
+            var sq9 = y4
+            att9[sq9] = att9[sq9] + 1
+            var dr9: bool = false
+            if sq9 == 0 && att9[0] == 1 { dr9 = true }
+            if !dr9 {
+                t3.rx_push(rx9, got9, sq9)
+            }
+            p9 = y10
+        }
+        if t3.rx_ack_due(rx9, tn9) == 1 {
+            var ab9 = t3.rx_ack_build(rx9, got9, 0, tn9)
+            if len(ab9) > 0 {
+                var (z0, z1, z2, z3, z4) = t3.ack_parse(ab9, 0, len(ab9))
+                t3.tx_on_ack(st9, segs9, z1, z3, z4)
+            }
+        }
+        if t3.tx_done(st9) == 1 {
+            r9 = 100
+        } else {
+            tn9 = tn9 + 200
+            r9 = r9 + 1
+        }
+    }
+    expect(t3.tx_done(st9) == 1 && rx9[0] == 2 && att9[0] == 2, "control_reliable")
+
+    // ---- 10) ACK 帧封装往返 ----
+    var af = t3.ack_frame(0, 3, 9, 7, g1, r1, crc)
+    var (u0f, u1f, u2f, u3f, u4f, u5f, u6f, u7f, u8f, u9f, u10f) = t3.frame_view(af, 0)
+    expect(u0f == 1 && u1f == t3.ft_ack(), "ack_frame_type")
+    var (w0f, w1f, w2f, w3f, w4f) = t3.ack_parse(af, u5f, u6f)
+    expect(w0f == 1 && w1f == 9 && w2f == 7 && len(w4f) == 2 && w4f[1] == 3, "ack_frame_body")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3r:ALL:PASS")
+    } else {
+        println("tinkv3r:ALL:FAIL")
+    }
+    return g_rc
+}
