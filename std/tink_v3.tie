@@ -520,4 +520,261 @@ pub func offset_prefix(off: i64) -> table<i64> {
     return bytes.to_u32_be(off)
 }
 
+// ==================== 消息与流（§5.2） ====================
+// MESSAGE：一条离散消息 = 单帧（≤65535B）或「多帧 + OFFSET 位」分片（首片 OFFSET=0、
+//   末片置 FIN）；接收端按 OFFSET 重组——容忍乱序，重复帧（内容逐字节一致）去重，
+//   重叠冲突 / 空洞 / 缺末片 FIN → 拒收。
+// STREAM_DATA：字节流块；OFFSET 用于断点续传/并行发送定位，重组取「从 0 起连续前缀」
+//   （遇空洞即归还已有前缀，供增量消费）。
+// DATAGRAM：不可靠消息（不重传不排序）；单帧即完整载荷，本层不做重组。
+// 保护位 prot 由调用方给定：0 = 裸（仅显式场景）或 fl_crc()（明文模式）；
+//   PROTECTED 帧在密码层密封后装配，本层解析时拒收（不可读）。
+
+// ---------- PING / PONG（body = nonce u64 BE） ----------
+
+pub func ping_body(nonce: i64) -> table<i64> { return bytes.to_u64_be(nonce) }
+pub func pong_body(nonce: i64) -> table<i64> { return bytes.to_u64_be(nonce) }
+
+pub func ping_frame(stream_id: i64, seq: i64, nonce: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_ping(), prot, stream_id, seq, ping_body(nonce), table_new_i64())
+}
+
+pub func pong_frame(stream_id: i64, seq: i64, nonce: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_pong(), prot, stream_id, seq, pong_body(nonce), table_new_i64())
+}
+
+// 读 PING/PONG body 的 nonce（<8 字节 → -1）
+pub func nonce_of(b: table<i64>, off: i64, n: i64) -> i64 {
+    if off < 0 || n < 8 || off + 8 > len(b) { return -1 }
+    return bytes.from_u64_be(b, off)
+}
+
+// ---------- RESET_STREAM / STOP_SENDING（body = code u32 BE） ----------
+
+pub func reset_frame(stream_id: i64, seq: i64, ec: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_reset_stream(), prot, stream_id, seq, bytes.to_u32_be(ec), table_new_i64())
+}
+
+pub func stop_frame(stream_id: i64, seq: i64, ec: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_stop_sending(), prot, stream_id, seq, bytes.to_u32_be(ec), table_new_i64())
+}
+
+// 读 RESET/STOP body 的 code（<4 字节 → -1）
+pub func code_of(b: table<i64>, off: i64, n: i64) -> i64 {
+    if off < 0 || n < 4 || off + 4 > len(b) { return -1 }
+    return bytes.from_u32_be(b, off)
+}
+
+// ---------- 分片收集与合并（MESSAGE / STREAM_DATA 共用核心） ----------
+
+// 收集缓冲区中的分片帧 → (ok, offs, voffs, vlens, fins)：
+//   offs   分片载荷绝对偏移（OFFSET 未置位按 0 处理——即整条消息位于位置 0）
+//   voffs/vlens 载荷视图（缓冲内偏移/字节数，已扣除 OFFSET 前缀）
+//   fins   FIN 位（0/1）
+// 校验：逐帧结构合法、类型 == want_ty、CRC（若有）必须通过、PROTECTED 拒收。
+func frag_collect(b: table<i64>, want_ty: i64) -> (i64, table<i64>, table<i64>, table<i64>, table<i64>) {
+    var offs = table_new_i64()
+    var voffs = table_new_i64()
+    var vlens = table_new_i64()
+    var fins = table_new_i64()
+    var pos: i64 = 0
+    while pos < len(b) {
+        var (ok, ty, fl, sd, sq, bo, bl, eo, el, iok, nx) = frame_view(b, pos)
+        if ok != 1 { return (0, offs, voffs, vlens, fins) }
+        if ty != want_ty { return (0, offs, voffs, vlens, fins) }
+        if (fl & 2) != 0 { return (0, offs, voffs, vlens, fins) }
+        if (fl & 4) != 0 && iok != 1 { return (0, offs, voffs, vlens, fins) }
+        var fo: i64 = 0
+        var vo = bo
+        var vl = bl
+        if (fl & 16) != 0 {
+            if bl < 4 { return (0, offs, voffs, vlens, fins) }
+            fo = bytes.from_u32_be(b, bo)
+            vo = bo + 4
+            vl = bl - 4
+        }
+        table_push(offs, fo)
+        table_push(voffs, vo)
+        table_push(vlens, vl)
+        var fmark: i64 = 0
+        if (fl & 8) != 0 { fmark = 1 }
+        table_push(fins, fmark)
+        pos = nx
+    }
+    return (1, offs, voffs, vlens, fins)
+}
+
+// 分片索引按偏移升序（选择排序；输出 idx 表）
+func frag_order(offs: table<i64>) -> table<i64> {
+    var n = len(offs)
+    var idx = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(idx, i)
+        i = i + 1
+    }
+    i = 0
+    while i < n {
+        var mi = i
+        var j: i64 = i + 1
+        while j < n {
+            if offs[idx[j]] < offs[idx[mi]] { mi = j }
+            j = j + 1
+        }
+        if mi != i {
+            var tv = idx[i]
+            idx[i] = idx[mi]
+            idx[mi] = tv
+        }
+        i = i + 1
+    }
+    return idx
+}
+
+// 严格合并（MESSAGE）：覆盖 [0, 终点) 无缝、首片从 0 起、末端片置 FIN；
+// 重复（完全包含且内容逐字节一致）去重；部分重叠 / 内容冲突 / 空洞 → 失败。
+func frag_merge_strict(b: table<i64>, offs: table<i64>, voffs: table<i64>, vlens: table<i64>, fins: table<i64>) -> (i64, table<i64>) {
+    var empty = table_new_i64()
+    var n = len(offs)
+    if n == 0 { return (0, empty) }
+    var idx = frag_order(offs)
+    var out = table_new_i64()
+    var cursor: i64 = 0
+    var last_fin: i64 = -1
+    var i: i64 = 0
+    while i < n {
+        var k = idx[i]
+        var fo = offs[k]
+        var vl = vlens[k]
+        var vo = voffs[k]
+        if fo > cursor { return (0, empty) }
+        if fo < cursor {
+            if fo + vl > cursor { return (0, empty) }
+            var q: i64 = 0
+            var same: bool = true
+            while q < vl {
+                if (b[vo + q] & 0xFF) != (out[fo + q] & 0xFF) { same = false }
+                q = q + 1
+            }
+            if !same { return (0, empty) }
+        } else {
+            var q2: i64 = 0
+            while q2 < vl {
+                table_push(out, b[vo + q2] & 0xFF)
+                q2 = q2 + 1
+            }
+            cursor = cursor + vl
+            last_fin = fins[k]
+        }
+        i = i + 1
+    }
+    if last_fin != 1 { return (0, empty) }
+    return (1, out)
+}
+
+// 前缀合并（STREAM）：从 0 起取连续前缀，遇空洞即归还已有前缀（ok=1）；
+// 部分重叠 / 内容冲突 → 失败；无分片 → 空前缀（ok=1）。
+func frag_merge_prefix(b: table<i64>, offs: table<i64>, voffs: table<i64>, vlens: table<i64>, fins: table<i64>) -> (i64, table<i64>) {
+    var empty = table_new_i64()
+    var n = len(offs)
+    if n == 0 { return (1, empty) }
+    var idx = frag_order(offs)
+    var out = table_new_i64()
+    var cursor: i64 = 0
+    var i: i64 = 0
+    while i < n {
+        var k = idx[i]
+        var fo = offs[k]
+        var vl = vlens[k]
+        var vo = voffs[k]
+        if fo > cursor { return (1, out) }
+        if fo < cursor {
+            if fo + vl > cursor { return (0, empty) }
+            var q: i64 = 0
+            var same: bool = true
+            while q < vl {
+                if (b[vo + q] & 0xFF) != (out[fo + q] & 0xFF) { same = false }
+                q = q + 1
+            }
+            if !same { return (0, empty) }
+        } else {
+            var q2: i64 = 0
+            while q2 < vl {
+                table_push(out, b[vo + q2] & 0xFF)
+                q2 = q2 + 1
+            }
+            cursor = cursor + vl
+        }
+        i = i + 1
+    }
+    return (1, out)
+}
+
+// ---------- MESSAGE ----------
+
+// 单帧消息（≤65535B；未分片；置 FIN）
+pub func msg_frame(payload: table<i64>, stream_id: i64, seq: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_message(), prot | fl_fin(), stream_id, seq, payload, table_new_i64())
+}
+
+// 分片：payload → 逐帧字节拼接（片帧 i 的 seq = start_seq + i；首片 OFFSET=0，末片 FIN）
+// 每片数据上限 max_chunk ≤ 65531（= 65535 − 4B offset 前缀；前缀计入 len）
+pub func msg_split(payload: table<i64>, stream_id: i64, start_seq: i64, max_chunk: i64, prot: i64) -> table<i64> {
+    var out = table_new_i64()
+    var total = len(payload)
+    var c = max_chunk
+    if c <= 0 { c = 65531 }
+    if c > 65531 { c = 65531 }
+    var nf = total / c
+    if nf * c < total { nf = nf + 1 }
+    if nf == 0 { nf = 1 }
+    var i: i64 = 0
+    while i < nf {
+        var cs = i * c
+        var ce = cs + c
+        if ce > total { ce = total }
+        var part = bytes.slice(payload, cs, ce)
+        var body = bytes.concat(bytes.to_u32_be(cs), part)
+        var fl: i64 = fl_offset() | prot
+        if i == nf - 1 { fl = fl | fl_fin() }
+        var fr = frame_encode(ft_message(), fl, stream_id, start_seq + i, body, table_new_i64())
+        out = bytes.concat(out, fr)
+        i = i + 1
+    }
+    return out
+}
+
+// 重组（严格）：→ (ok, payload)
+pub func msg_join(b: table<i64>) -> (i64, table<i64>) {
+    var empty = table_new_i64()
+    var (okc, offs, voffs, vlens, fins) = frag_collect(b, ft_message())
+    if okc != 1 || len(offs) == 0 { return (0, empty) }
+    return frag_merge_strict(b, offs, voffs, vlens, fins)
+}
+
+// ---------- STREAM_DATA ----------
+
+// 字节流块：data 位于流内偏移 off；fin_flag 置 FIN（半关闭）
+pub func stream_chunk(data: table<i64>, stream_id: i64, seq: i64, off: i64, fin_flag: bool, prot: i64) -> table<i64> {
+    var body = bytes.concat(bytes.to_u32_be(off), data)
+    var fl: i64 = fl_offset() | prot
+    if fin_flag { fl = fl | fl_fin() }
+    return frame_encode(ft_stream_data(), fl, stream_id, seq, body, table_new_i64())
+}
+
+// 重组（前缀）：→ (ok, 从 0 起的连续前缀)
+pub func stream_join(b: table<i64>) -> (i64, table<i64>) {
+    var empty = table_new_i64()
+    var (okc, offs, voffs, vlens, fins) = frag_collect(b, ft_stream_data())
+    if okc != 1 { return (0, empty) }
+    return frag_merge_prefix(b, offs, voffs, vlens, fins)
+}
+
+// ---------- DATAGRAM ----------
+
+// 不可靠消息单帧（不重传不排序；丢包即丢）
+pub func datagram_frame(payload: table<i64>, stream_id: i64, seq: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_datagram(), prot, stream_id, seq, payload, table_new_i64())
+}
+
 }   // namespace tink3

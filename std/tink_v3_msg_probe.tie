@@ -1,0 +1,212 @@
+type tie<logic>
+// std/tink_v3_msg_probe.tie —— tink v3 消息与流探针（设计文档 §5.2 验收）
+// 覆盖：PING/PONG nonce；RESET/STOP code；MESSAGE 单帧/分片/乱序重组/重复去重/
+//   缺片拒收/重叠冲突拒收/无 FIN 拒收/空消息；65536 边界；STREAM 块重组/乱序/
+//   空洞前缀/内容冲突拒收；DATAGRAM（CRC 与裸）；PROTECTED 分片拒收。
+// 每项 PASS 打 `tinkv3m:<name>:OK`；失败 `tinkv3m:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3m:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3m:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3m:" + name + ":OK")
+    }
+}
+
+func eqbytes(a: table<i64>, b: table<i64>) -> bool {
+    if len(a) != len(b) { return false }
+    var i: i64 = 0
+    while i < len(a) {
+        if (a[i] & 0xFF) != (b[i] & 0xFF) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+func cat2(a: table<i64>, b: table<i64>) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < len(a) {
+        table_push(o, a[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(b) {
+        table_push(o, b[i])
+        i = i + 1
+    }
+    return o
+}
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+
+    // ---- 1) PING / PONG ----
+    var pf = t3.ping_frame(0, 5, 0x1122334455667788, crc)
+    var (p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10) = t3.frame_view(pf, 0)
+    expect(p0 == 1 && p1 == t3.ft_ping() && p9 == 1 && p10 == len(pf) && t3.nonce_of(pf, p5, p6) == 0x1122334455667788, "ping_nonce")
+    var qf = t3.pong_frame(0, 6, 0x0102030405060708, crc)
+    var (q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10) = t3.frame_view(qf, 0)
+    expect(q0 == 1 && q1 == t3.ft_pong() && t3.nonce_of(qf, q5, q6) == 0x0102030405060708, "pong_nonce")
+    expect(t3.nonce_of(qf, q5, 4) == -1, "nonce_short")
+
+    // ---- 2) RESET / STOP ----
+    var rf = t3.reset_frame(3, 9, t3.err_timeout(), crc)
+    var (r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10) = t3.frame_view(rf, 0)
+    expect(r0 == 1 && r1 == t3.ft_reset_stream() && t3.code_of(rf, r5, r6) == 0x0104, "reset_timeout_code")
+    var sf = t3.stop_frame(3, 10, 0x0203, crc)
+    var (t0, t1, t2, t3v, t4, t5, t6, t7, t8, t9, t10) = t3.frame_view(sf, 0)
+    expect(t0 == 1 && t1 == t3.ft_stop_sending() && t3.code_of(sf, t5, t6) == 0x0203, "stop_code")
+    expect(t3.code_of(sf, t5, 2) == -1, "code_short")
+
+    // ---- 3) MESSAGE 单帧 ----
+    var m1 = pat(1000)
+    var mf1 = t3.msg_frame(m1, 1, 7, crc)
+    var (o0, o1, o2, o3, o4, o5, o6, o7, o8, o9, o10) = t3.frame_view(mf1, 0)
+    expect(o0 == 1 && o1 == t3.ft_message() && (o2 & t3.fl_fin()) != 0 && (o2 & t3.fl_offset()) == 0, "msg_single_flags")
+    var (j1ok, j1p) = t3.msg_join(mf1)
+    expect(j1ok == 1 && eqbytes(j1p, m1), "msg_single_join")
+
+    // ---- 4) MESSAGE 分片（200000B → 4 片，max=65535） ----
+    var big = pat(200000)
+    var frags = t3.msg_split(big, 1, 100, 65535, crc)
+    var pos: i64 = 0
+    var cnt: i64 = 0
+    var offok: bool = true
+    while pos < len(frags) {
+        var (e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10) = t3.frame_view(frags, pos)
+        var fo = bytes.from_u32_be(frags, e5)
+        if fo != cnt * 65531 { offok = false }
+        var fin_set: bool = (e2 & t3.fl_fin()) != 0
+        if cnt == 3 {
+            if !fin_set { offok = false }
+        } else {
+            if fin_set { offok = false }
+        }
+        if e3 != 1 { offok = false }
+        if e4 != 100 + cnt { offok = false }
+        pos = e10
+        cnt = cnt + 1
+    }
+    expect(cnt == 4 && offok, "msg_split_4")
+    var (j2ok, j2p) = t3.msg_join(frags)
+    expect(j2ok == 1 && eqbytes(j2p, big), "msg_join_roundtrip")
+
+    // ---- 5) 乱序重组（帧倒序重排） ----
+    var order = table_new_i64()
+    pos = 0
+    while pos < len(frags) {
+        table_push(order, pos)
+        pos = t3.frame_skip(frags, pos)
+    }
+    var rev = table_new_i64()
+    var ri = len(order) - 1
+    while ri >= 0 {
+        var s0 = order[ri]
+        var s1 = t3.frame_skip(frags, s0)
+        rev = cat2(rev, bytes.slice(frags, s0, s1))
+        ri = ri - 1
+    }
+    var (j3ok, j3p) = t3.msg_join(rev)
+    expect(j3ok == 1 && eqbytes(j3p, big), "msg_join_unordered")
+
+    // ---- 6) 重复去重（第 2 帧原样再插一次） ----
+    var dupf = cat2(frags, bytes.slice(frags, order[1], t3.frame_skip(frags, order[1])))
+    var (j4ok, j4p) = t3.msg_join(dupf)
+    expect(j4ok == 1 && eqbytes(j4p, big), "msg_join_dup_dedupe")
+
+    // ---- 7) 缺片拒收 ----
+    var miss = cat2(bytes.slice(frags, 0, order[1]), bytes.slice(frags, order[2], len(frags)))
+    var (j5ok, j5p) = t3.msg_join(miss)
+    expect(j5ok == 0, "msg_join_missing")
+
+    // ---- 8) 重叠冲突拒收（伪造 [10,15) 内容不符的 CRC 合法分片） ----
+    var cbody = cat2(bytes.to_u32_be(10), bytes.fill(5, 0))
+    var cfr = t3.frame_encode(t3.ft_message(), t3.fl_offset() | crc, 1, 999, cbody, empty)
+    var conf = cat2(frags, cfr)
+    var (j6ok, j6p) = t3.msg_join(conf)
+    expect(j6ok == 0, "msg_join_conflict")
+
+    // ---- 9) 空消息 ----
+    var ef = t3.msg_frame(empty, 1, 1, crc)
+    var (j7ok, j7p) = t3.msg_join(ef)
+    expect(j7ok == 1 && len(j7p) == 0, "msg_empty")
+
+    // ---- 10) 65536 边界 → 2 片 ----
+    var b2 = pat(65536)
+    var fr2 = t3.msg_split(b2, 1, 0, 65535, crc)
+    var n2c: i64 = 0
+    pos = 0
+    while pos < len(fr2) {
+        n2c = n2c + 1
+        pos = t3.frame_skip(fr2, pos)
+    }
+    var (j8ok, j8p) = t3.msg_join(fr2)
+    expect(n2c == 2 && j8ok == 1 && eqbytes(j8p, b2), "msg_boundary_65536")
+
+    // ---- 11) 无 FIN 拒收（末片未置 FIN） ----
+    var nf1 = t3.frame_encode(t3.ft_message(), crc, 1, 1, pat(10), empty)
+    var (j9ok, j9p) = t3.msg_join(nf1)
+    expect(j9ok == 0, "msg_no_fin_reject")
+
+    // ---- 12) STREAM 块 ----
+    var full = pat(2500)
+    var ch0 = t3.stream_chunk(bytes.slice(full, 0, 1000), 2, 0, 0, false, crc)
+    var ch1 = t3.stream_chunk(bytes.slice(full, 1000, 2000), 2, 1, 1000, false, crc)
+    var ch2 = t3.stream_chunk(bytes.slice(full, 2000, 2500), 2, 2, 2000, true, crc)
+    var sall = cat2(cat2(ch0, ch1), ch2)
+    var (s1ok, s1d) = t3.stream_join(sall)
+    expect(s1ok == 1 && eqbytes(s1d, full), "stream_chunks_join")
+    var sall2 = cat2(cat2(ch2, ch0), ch1)
+    var (s2ok, s2d) = t3.stream_join(sall2)
+    expect(s2ok == 1 && eqbytes(s2d, full), "stream_join_reordered")
+    var sgap = cat2(ch0, ch2)
+    var (s3ok, s3d) = t3.stream_join(sgap)
+    expect(s3ok == 1 && len(s3d) == 1000 && eqbytes(s3d, bytes.slice(full, 0, 1000)), "stream_prefix_on_gap")
+    var ch1b = t3.stream_chunk(bytes.fill(1000, 0xAA), 2, 9, 1000, false, crc)
+    var sconf = cat2(cat2(ch0, ch1), cat2(ch1b, ch2))
+    var (s4ok, s4d) = t3.stream_join(sconf)
+    expect(s4ok == 0, "stream_conflict_reject")
+
+    // ---- 13) DATAGRAM ----
+    var dgp = pat(300)
+    var dgf = t3.datagram_frame(dgp, 7, 9, crc)
+    var (g0, g1, g2, g3, g4, g5, g6, g7, g8, g9, g10) = t3.frame_view(dgf, 0)
+    expect(g0 == 1 && g1 == t3.ft_datagram() && g9 == 1 && eqbytes(t3.frame_take(dgf, g5, g6), dgp), "datagram_crc")
+    var dgn = t3.datagram_frame(dgp, 7, 10, 0)
+    var (h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10) = t3.frame_view(dgn, 0)
+    expect(h0 == 1 && h9 == -1 && h10 == len(dgn), "datagram_naked")
+
+    // ---- 14) PROTECTED 分片拒收 ----
+    var pbody = cat2(bytes.to_u32_be(0), pat(10))
+    var pmh = t3.header_encode(t3.ft_message(), t3.fl_protected() | t3.fl_offset(), 1, 1, len(pbody))
+    var pmf = cat2(cat2(pmh, pbody), pat(16))
+    var (n1ok, n1p) = t3.msg_join(pmf)
+    expect(n1ok == 0, "msg_protected_reject")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3m:ALL:PASS")
+    } else {
+        println("tinkv3m:ALL:FAIL")
+    }
+    return g_rc
+}
