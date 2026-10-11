@@ -41,6 +41,9 @@ type tie<class>
 // 探针：std/tink_v3_probe.tie（帧骨架验收，对应设计文档 §11 探针集）。
 
 import "./bytes.tie" as bytes
+import "./x25519.tie" as x25519
+import "./ed25519.tie" as ed25519
+import "./hkdf.tie" as hkdf
 
 // CRC32C 查表（Castagnoli，反射多项式 0x82F63B78；懒构建一次，见 crc32c_ensure）
 var crc32c_tab: table<i64>;
@@ -1324,6 +1327,190 @@ pub func sched_round(sids: table<i64>, prios: table<i64>, urgents: table<i64>, p
         pass = pass + 1
     }
     return out
+}
+
+// ==================== 握手（§6.2） ====================
+// TLS 1.3 式 1-RTT 双向认证（0-RTT 见 §6.5）。消息体（全大端）：
+//   HELLO     : ver u8 + ver_min u8 + rand 32 + eph_pub 32(x25519) + id_pub 32(ed25519)
+//               + suites u16 位图 + features u64 + ticket?（0-RTT 恢复票，余量任意长）
+//   HELLO_ACK : ver u8 + rand 32 + eph_pub 32 + id_pub 32 + suite u16 + features u64
+//               + sig 64（服务端 ed25519，对 transcript）
+//   FINISH    : sig 64（客户端 ed25519，对 transcript）
+// transcript（签名绑定全部协商参数，防降级/防中间人；口径钉死为 KAT）：
+//   server_t = HELLO体 ‖ HELLO_ACK前段（ver/rand/eph/id/suite/features，不含 sig 自身）
+//   client_t = HELLO体 ‖ HELLO_ACK体（含 sig）
+// 密钥表（TLS 1.3 式；HKDF = HMAC-SHA256；info 标签经 hex 编码）：
+//   PRK = HKDF-Extract(salt=0, X25519 共享)；
+//   "tink v3 c hs traffic" / "tink v3 s hs traffic" / "tink v3 c ap traffic"
+//   / "tink v3 s ap traffic" / "tink v3 exp master"（各 32B；方向分离 c2s/s2c）。
+// 套件 id：0 = CHACHA20_POLY1305_SHA256（默认）；1 = AES_128_GCM_SHA256；2..3 PQ 预留。
+// features 位（§6.6 哈希能力）：bit0 TSHA2 / bit1 BLAKE3 / bit2 SHA-256。
+
+// 标签 → info hex（HKDF/hmac/ed25519 的消息域均为 hex 串）
+func label_hex(s: string) -> string {
+    return bytes.to_hex(bytes.from_ascii(s))
+}
+
+pub func suite_chacha20_poly1305_sha256() -> i64 { return 0 }
+pub func suite_aes_128_gcm_sha256() -> i64 { return 1 }
+pub func feat_hash_tsha2() -> i64 { return 1 }
+pub func feat_hash_blake3() -> i64 { return 2 }
+pub func feat_hash_sha256() -> i64 { return 4 }
+
+// 套件协商：双方位图交集的最小 id（id 序 = 优先级）；无交集 → -1
+pub func hs_choose_suite(c_suites: i64, s_suites: i64) -> i64 {
+    var both = c_suites & s_suites
+    var i: i64 = 0
+    while i < 16 {
+        if ((both >> i) & 1) != 0 { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// 哈希能力协商：共同能力中的最高优先序（BLAKE3 > TSHA2 > SHA-256）；无 → 0
+// 返回位值：2 = BLAKE3 / 1 = TSHA2 / 4 = SHA-256
+pub func hs_choose_hash(c_feat: i64, s_feat: i64) -> i64 {
+    var both = c_feat & s_feat
+    if (both & 2) != 0 { return 2 }
+    if (both & 1) != 0 { return 1 }
+    if (both & 4) != 0 { return 4 }
+    return 0
+}
+
+// hex 串 → 32 字节表（不足补零；公钥/随机数）
+pub func hx32(h: string) -> table<i64> {
+    var t = bytes.from_hex(h)
+    var out = table_new_i64()
+    var i: i64 = 0
+    while i < 32 {
+        if i < len(t) { table_push(out, t[i] & 0xFF) } else { table_push(out, 0) }
+        i = i + 1
+    }
+    return out
+}
+
+// 内部：32B 定长段追加
+func push32(ref out: table<i64>, seg: table<i64>) {
+    var i: i64 = 0
+    while i < 32 {
+        if i < len(seg) { table_push(out, seg[i] & 0xFF) } else { table_push(out, 0) }
+        i = i + 1
+    }
+}
+
+// 内部：u64 追加
+func push64(ref out: table<i64>, v: i64) {
+    var i: i64 = 7
+    while i >= 0 {
+        table_push(out, (v >> (i * 8)) & 0xFF)
+        i = i - 1
+    }
+}
+
+// ---------- 消息体构造 ----------
+
+// HELLO 体：前 108B 定长 + ticket 余量
+pub func hello_body(ver: i64, ver_min: i64, rand: table<i64>, eph_pub: table<i64>, id_pub: table<i64>, suites: i64, features: i64, ticket: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    table_push(out, ver & 0xFF)
+    table_push(out, ver_min & 0xFF)
+    push32(out, rand)
+    push32(out, eph_pub)
+    push32(out, id_pub)
+    table_push(out, (suites >> 8) & 0xFF)
+    table_push(out, suites & 0xFF)
+    push64(out, features)
+    return bytes.concat(out, ticket)
+}
+
+// HELLO_ACK 前段（不含 sig）
+pub func hello_ack_prefix(ver: i64, rand: table<i64>, eph_pub: table<i64>, id_pub: table<i64>, suite: i64, features: i64) -> table<i64> {
+    var out = table_new_i64()
+    table_push(out, ver & 0xFF)
+    push32(out, rand)
+    push32(out, eph_pub)
+    push32(out, id_pub)
+    table_push(out, (suite >> 8) & 0xFF)
+    table_push(out, suite & 0xFF)
+    push64(out, features)
+    return out
+}
+
+// HELLO_ACK 完整体 = 前段 ‖ sig
+pub func hello_ack_body(prefix: table<i64>, sig: table<i64>) -> table<i64> {
+    return bytes.concat(prefix, sig)
+}
+
+// ---------- 扫描（解析对端消息体） ----------
+// HELLO → (ok, info)；info 步长 9：[ver, vmin, suites, features, rand_off, eph_off, id_off, ticket_off, ticket_len]
+pub func hs_hello_scan(b: table<i64>, off: i64, n: i64) -> (i64, table<i64>) {
+    var info = table_new_i64()
+    if off < 0 || n < 108 || off + n > len(b) { return (0, info) }
+    table_push(info, b[off] & 0xFF)
+    table_push(info, b[off + 1] & 0xFF)
+    table_push(info, bytes.from_u16_be(b, off + 98))
+    table_push(info, bytes.from_u64_be(b, off + 100))
+    table_push(info, off + 2)
+    table_push(info, off + 34)
+    table_push(info, off + 66)
+    table_push(info, off + 108)
+    table_push(info, n - 108)
+    return (1, info)
+}
+
+// HELLO_ACK → (ok, info)；info 步长 7：[ver, suite, features, rand_off, eph_off, id_off, sig_off]；须 n ≥ 171
+pub func hs_ack_scan(b: table<i64>, off: i64, n: i64) -> (i64, table<i64>) {
+    var info = table_new_i64()
+    if off < 0 || n < 171 || off + n > len(b) { return (0, info) }
+    table_push(info, b[off] & 0xFF)
+    table_push(info, bytes.from_u16_be(b, off + 98))
+    table_push(info, bytes.from_u64_be(b, off + 100))
+    table_push(info, off + 1)
+    table_push(info, off + 33)
+    table_push(info, off + 65)
+    table_push(info, off + 107)
+    return (1, info)
+}
+
+// ---------- 签名与 transcript ----------
+
+// 服务端 transcript = HELLO体 ‖ ACK 前段
+pub func hs_transcript_server(hello: table<i64>, ack_prefix: table<i64>) -> table<i64> {
+    return bytes.concat(hello, ack_prefix)
+}
+
+// 客户端 transcript = HELLO体 ‖ ACK 体（含 sig）
+pub func hs_transcript_client(hello: table<i64>, ack_full: table<i64>) -> table<i64> {
+    return bytes.concat(hello, ack_full)
+}
+
+// X25519 密钥对 / 共享（转出封装，探测与上层免 import 细节）
+pub func hs_eph_keygen(seed_hex: string) -> string { return x25519.keygen(seed_hex) }
+pub func hs_shared(eph_sk_hex: string, peer_eph_pk_hex: string) -> string { return x25519.dh(eph_sk_hex, peer_eph_pk_hex) }
+pub func hs_id_keygen(seed_hex: string) -> string { return ed25519.keygen(seed_hex) }
+
+// 对 transcript 签名（私钥种子 hex）→ sig hex
+pub func hs_sign(id_seed_hex: string, transcript: table<i64>) -> string {
+    var pubk = ed25519.keygen(id_seed_hex)
+    return ed25519.sign(bytes.to_hex(transcript), pubk, id_seed_hex)
+}
+
+// 验证 transcript 的 sig（公钥 hex）→ 1/0
+pub func hs_verify(id_pub_hex: string, transcript: table<i64>, sig_hex: string) -> i64 {
+    return ed25519.verify(id_pub_hex, bytes.to_hex(transcript), sig_hex)
+}
+
+// ---------- 密钥表 ----------
+
+// X25519 共享（hex）→ 五个 32B 秘密（hex）：(c_hs, s_hs, c_ap, s_ap, 导出 master)
+pub func hs_keys(shared_hex: string) -> (string, string, string, string, string) {
+    var prk = hkdf.extract("", shared_hex)
+    return (hkdf.expand(prk, label_hex("tink v3 c hs traffic"), 32),
+            hkdf.expand(prk, label_hex("tink v3 s hs traffic"), 32),
+            hkdf.expand(prk, label_hex("tink v3 c ap traffic"), 32),
+            hkdf.expand(prk, label_hex("tink v3 s ap traffic"), 32),
+            hkdf.expand(prk, label_hex("tink v3 exp master"), 32))
 }
 
 }   // namespace tink3
