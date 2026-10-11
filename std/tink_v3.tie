@@ -46,6 +46,9 @@ import "./ed25519.tie" as ed25519
 import "./hkdf.tie" as hkdf
 import "./hmac.tie" as hmac
 import "./chacha20.tie" as chacha20
+import "./blake3.tie" as blake3
+import "./sha256.tie" as sha
+import "./tsha2.tie" as tsha2
 
 // CRC32C 查表（Castagnoli，反射多项式 0x82F63B78；懒构建一次，见 crc32c_ensure）
 var crc32c_tab: table<i64>;
@@ -2359,6 +2362,422 @@ pub func rpc_expire(ref st: table<i64>, now_ms: i64) -> table<i64> {
         i = i + 1
     }
     return out
+}
+
+// ==================== 内容与验证流（§8） ====================
+// content_id = algo u8 + len u8 + digest（与 peer_id 同构）。
+// algo 1 = BLAKE3-256（首选）：原生树验证流（1024B 叶 = chunk CV；根 = blake3_256，与官方一致）；
+// algo 2 = TSHA2F-48（备选）：分块链 c₀ = H(块₀)；cᵢ = H(串字节(cᵢ₋₁) ‖ 块ᵢ)（逐块摘要 + 链式
+//   定位；根 = 末链值，base48 串 ASCII 作摘要字节；前缀可续算 ⇒ 断点续传一致）；
+// algo 3 = SHA-256（兜底）：自建 Merkle（1024B 叶、官方栈形；父 = sha256(raw(l) ‖ raw(r)))。
+// 树族验证流 = 叶路径（siblings + 方向位），逐块拉取即验；CHUNK_PROOF 帧承载。
+// GET/HAVE/PUT 帧 + GET(range) 增量 ⇒ 断点续传（已验块集合）。
+
+pub func cas_chunk() -> i64 { return 1024 }
+
+pub func cid_make(algo: i64, digest: table<i64>) -> table<i64> { return pid_make(algo, digest) }
+
+// → (ok, algo, d_off, d_len, total)
+pub func cid_scan(b: table<i64>, off: i64) -> (i64, i64, i64, i64, i64) {
+    if off < 0 || off + 2 > len(b) { return (0, 0, 0, 0, 0) }
+    var algo = b[off] & 0xFF
+    var dl = b[off + 1] & 0xFF
+    if off + 2 + dl > len(b) { return (0, 0, 0, 0, 0) }
+    return (1, algo, off + 2, dl, 2 + dl)
+}
+
+// 二进制安全切片（字节域）
+func bsub(s: string, a: i64, b: i64) -> string {
+    var sb = string_builder()
+    var i: i64 = a
+    while i < b && i < len(s) {
+        sb_append_byte(sb, str_byte(s, i) & 0xFF)
+        i = i + 1
+    }
+    return sb_build(sb)
+}
+
+// 族哈希（字符串进、字符串出）
+pub func fam_hash(algo: i64, msg: string) -> string {
+    if algo == 1 { return blake3.blake3_256(msg) }
+    if algo == 2 { return tsha2.tsha2f(msg, 48) }
+    if algo == 3 { return sha.sha256(msg) }
+    return ""
+}
+
+// 叶值（树族；algo 2 无叶概念）
+func cas_leaf(algo: i64, msg: string, off: i64, clen: i64, counter: i64) -> string {
+    if algo == 1 { return blake3.cas_leaf_hex(msg, off, clen, counter) }
+    if algo == 3 { return sha.sha256(bsub(msg, off, off + clen)) }
+    return ""
+}
+
+// 父值（树族；root = 顶层合并）
+func cas_parent(algo: i64, l: string, r: string, root: bool) -> string {
+    if algo == 1 { return blake3.cas_parent_hex(l, r, root) }
+    if algo == 3 {
+        var sb = string_builder()
+        var lb = bytes.from_hex(l)
+        var rb = bytes.from_hex(r)
+        var i: i64 = 0
+        while i < len(lb) {
+            sb_append_byte(sb, lb[i] & 0xFF)
+            i = i + 1
+        }
+        i = 0
+        while i < len(rb) {
+            sb_append_byte(sb, rb[i] & 0xFF)
+            i = i + 1
+        }
+        return sha.sha256(sb_build(sb))
+    }
+    return ""
+}
+
+// 叶列表（1024B 切块；空内容 → 单叶占位 = fam_hash）
+pub func cas_leaves(algo: i64, msg: string) -> table<string> {
+    var out: table<string> = []
+    var n = len(msg)
+    if n == 0 {
+        table_push(out, fam_hash(algo, msg))
+        return out
+    }
+    var pos: i64 = 0
+    var ci: i64 = 0
+    while pos < n {
+        var clen: i64 = 1024
+        if pos + clen > n { clen = n - pos }
+        table_push(out, cas_leaf(algo, msg, pos, clen, ci))
+        pos = pos + clen
+        ci = ci + 1
+    }
+    return out
+}
+
+// 栈形归并（与 blake3 官方 finalize 对齐：末叶不入栈；末次合并 = 根）
+func cas_merge(algo: i64, leaves: table<string>) -> string {
+    var m = len(leaves)
+    var stack: table<string> = []
+    var slen: i64 = 0
+    var total: i64 = 0
+    var i: i64 = 0
+    while i < m - 1 {
+        var cv = leaves[i]
+        total = total + 1
+        var t = total
+        while t % 2 == 0 {
+            var l = stack[slen - 1]
+            cv = cas_parent(algo, l, cv, false)
+            slen = slen - 1
+            t = t / 2
+        }
+        if slen < len(stack) {
+            stack[slen] = cv
+        } else {
+            table_push(stack, cv)
+        }
+        slen = slen + 1
+        i = i + 1
+    }
+    var acc = leaves[m - 1]
+    var si = slen
+    while si > 0 {
+        var l2 = stack[si - 1]
+        var fl: bool = (si == 1)
+        acc = cas_parent(algo, l2, acc, fl)
+        si = si - 1
+    }
+    return acc
+}
+
+// 树根：≤1024 → fam_hash；否则栈形归并
+pub func cas_root(algo: i64, msg: string) -> string {
+    if len(msg) <= 1024 { return fam_hash(algo, msg) }
+    return cas_merge(algo, cas_leaves(algo, msg))
+}
+
+// 小于 n 的最大 2 的幂
+func p2lt(n: i64) -> i64 {
+    var p: i64 = 1
+    while p * 2 < n {
+        p = p * 2
+    }
+    return p
+}
+
+// 子树值（叶区间 [a, b)，递归分裂形状与栈形一致）
+func cas_subtree(algo: i64, leaves: table<string>, a: i64, b: i64) -> string {
+    var size = b - a
+    if size == 1 { return leaves[a] }
+    var k = p2lt(size)
+    var l = cas_subtree(algo, leaves, a, a + k)
+    var r = cas_subtree(algo, leaves, a + k, b)
+    return cas_parent(algo, l, r, false)
+}
+
+// 证明：叶 i 的路径 → (ok, siblings, rights, root)
+//   rights[k] = 1 表示第 k 层该节点为右子（兄弟在左）
+pub func cas_proof(algo: i64, msg: string, i: i64) -> (i64, table<string>, table<i64>, string) {
+    var sibs: table<string> = []
+    var rights: table<i64> = []
+    if len(msg) <= 1024 {
+        if i != 0 { return (0, sibs, rights, "") }
+        return (1, sibs, rights, fam_hash(algo, msg))
+    }
+    var leaves = cas_leaves(algo, msg)
+    var m = len(leaves)
+    if i < 0 || i >= m { return (0, sibs, rights, "") }
+    var root = cas_merge(algo, leaves)
+    var lo: i64 = 0
+    var size = m
+    while size > 1 {
+        var k = p2lt(size)
+        if i - lo < k {
+            table_push(sibs, cas_subtree(algo, leaves, lo + k, lo + size))
+            table_push(rights, 0)
+            size = k
+        } else {
+            table_push(sibs, cas_subtree(algo, leaves, lo, lo + k))
+            table_push(rights, 1)
+            lo = lo + k
+            size = size - k
+        }
+    }
+    // 路径反转：自底向上（叶侧在前；末元素 = 顶层合并，校验时加 ROOT）
+    var rs: table<string> = []
+    var rw: table<i64> = []
+    var q = len(sibs) - 1
+    while q >= 0 {
+        table_push(rs, sibs[q])
+        table_push(rw, rights[q])
+        q = q - 1
+    }
+    return (1, rs, rw, root)
+}
+
+// 校验：块字节 + 路径 → 1/0（单叶：直接 fam_hash 比对）
+pub func cas_verify_chunk(algo: i64, chunk_msg: string, i: i64, sibs: table<string>, rights: table<i64>, root: string) -> i64 {
+    if len(sibs) == 0 {
+        if fam_hash(algo, chunk_msg) == root { return 1 }
+        return 0
+    }
+    var node = cas_leaf(algo, chunk_msg, 0, len(chunk_msg), i)
+    var lvl = len(sibs)
+    var k: i64 = 0
+    while k < lvl {
+        var fl: bool = (k == lvl - 1)
+        if rights[k] != 0 {
+            node = cas_parent(algo, sibs[k], node, fl)
+        } else {
+            node = cas_parent(algo, node, sibs[k], fl)
+        }
+        k = k + 1
+    }
+    if node == root { return 1 }
+    return 0
+}
+
+// ---- 链族（algo 2） ----
+
+// 链推进一步：c' = H(串字节(c) ‖ 块)
+pub func chain_step(algo: i64, carry: string, block_msg: string) -> string {
+    var sb = string_builder()
+    var i: i64 = 0
+    while i < str_len(carry) {
+        sb_append_byte(sb, char_code(str_char(carry, i)) & 0xFF)
+        i = i + 1
+    }
+    i = 0
+    while i < len(block_msg) {
+        sb_append_byte(sb, str_byte(block_msg, i) & 0xFF)
+        i = i + 1
+    }
+    return fam_hash(algo, sb_build(sb))
+}
+
+// 全量链根
+pub func chain_root(algo: i64, msg: string) -> string {
+    var n = len(msg)
+    if n == 0 { return fam_hash(algo, "") }
+    var pos: i64 = 0
+    var st: string = ""
+    var first: bool = true
+    while pos < n {
+        var clen: i64 = 1024
+        if pos + clen > n { clen = n - pos }
+        var blk = bsub(msg, pos, pos + clen)
+        if first {
+            st = fam_hash(algo, blk)
+            first = false
+        } else {
+            st = chain_step(algo, st, blk)
+        }
+        pos = pos + clen
+    }
+    return st
+}
+
+// 链前缀（断点续传）：处理 [0, lim) 内完整块 → (链态, 已处理字节数)；不足一块 → ("", 0)
+pub func chain_prefix(algo: i64, msg: string, lim: i64) -> (string, i64) {
+    var n = len(msg)
+    if lim > n { lim = n }
+    var cnt: i64 = lim / 1024
+    if lim == n && n > 0 && n <= 1024 { cnt = 1 }
+    if cnt == 0 { return ("", 0) }
+    var st: string = ""
+    var pos: i64 = 0
+    var b: i64 = 0
+    while b < cnt {
+        var clen: i64 = 1024
+        if pos + clen > n { clen = n - pos }
+        var blk = bsub(msg, pos, pos + clen)
+        if b == 0 {
+            st = fam_hash(algo, blk)
+        } else {
+            st = chain_step(algo, st, blk)
+        }
+        pos = pos + clen
+        b = b + 1
+    }
+    return (st, pos)
+}
+
+// ---- CAS 操作 ----
+
+// content_id：alg 1/3 = 树根字节（32B）；alg 2 = 链根 base48 串 ASCII 字节
+pub func cas_cid(algo: i64, msg: string) -> table<i64> {
+    var root: string = ""
+    if algo == 2 {
+        root = chain_root(2, msg)
+    } else {
+        root = cas_root(algo, msg)
+    }
+    if str_len(root) == 0 { return table_new_i64() }
+    var dig = table_new_i64()
+    if algo == 2 {
+        dig = bytes.from_ascii(root)
+    } else {
+        dig = bytes.from_hex(root)
+    }
+    return cid_make(algo, dig)
+}
+
+// 校验 msg 是否匹配 cid → 1/0
+pub func cas_verify_cid(algo: i64, msg: string, cid: table<i64>, off: i64) -> i64 {
+    var (ok, a, do, dl, tot) = cid_scan(cid, off)
+    if ok != 1 || a != algo { return 0 }
+    var mine = cas_cid(algo, msg)
+    var (m0, m1, m2, m3, m4) = cid_scan(mine, 0)
+    if m0 != 1 || m3 != dl { return 0 }
+    var i: i64 = 0
+    var same: i64 = 1
+    while i < dl {
+        if (cid[do + i] & 0xFF) != (mine[m2 + i] & 0xFF) { same = 0 }
+        i = i + 1
+    }
+    return same
+}
+
+// GET(range)：blob 字节表区间（饱和）
+pub func cas_get(blob: table<i64>, off: i64, len: i64) -> table<i64> {
+    return bytes.slice(blob, off, off + len)
+}
+
+pub func cas_chunk_count(n: i64) -> i64 {
+    if n <= 0 { return 1 }
+    var c = n / 1024
+    if c * 1024 < n { c = c + 1 }
+    return c
+}
+
+// 第 i 块切片（1024B 粒度，饱和）
+pub func cas_chunk_slice(blob: table<i64>, i: i64) -> table<i64> {
+    var a = i * 1024
+    return bytes.slice(blob, a, a + 1024)
+}
+
+// ---- GET / HAVE / PUT / CHUNK_PROOF 帧 ----
+
+// GET body = cid ‖ u32 off ‖ u32 len；→ (ok, cid_off, cid_total, roff, rlen)
+pub func get_body(cid: table<i64>, off: i64, len: i64) -> table<i64> {
+    return bytes.concat(bytes.concat(cid, bytes.to_u32_be(off)), bytes.to_u32_be(len))
+}
+
+pub func get_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64, i64) {
+    var (ok0, algo, do, dl, tot) = cid_scan(b, off)
+    if ok0 != 1 || n < tot + 8 { return (0, 0, 0, 0, 0) }
+    return (1, off, tot, bytes.from_u32_be(b, off + tot), bytes.from_u32_be(b, off + tot + 4))
+}
+
+pub func get_frame(stream_id: i64, seq: i64, cid: table<i64>, off: i64, len: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_get(), prot, stream_id, seq, get_body(cid, off, len), table_new_i64())
+}
+
+pub func have_frame(stream_id: i64, seq: i64, cid: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_have(), prot, stream_id, seq, cid, table_new_i64())
+}
+
+pub func put_frame(stream_id: i64, seq: i64, cid: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_put(), prot, stream_id, seq, cid, table_new_i64())
+}
+
+// CHUNK_PROOF body = i u32 ‖ count u16 ‖ rights u16（位 k = 第 k 层为右子）‖ sibling 32B × count
+pub func chunk_proof_body(i: i64, sibs: table<string>, rights: table<i64>) -> table<i64> {
+    var cnt = len(sibs)
+    var out = bytes.to_u32_be(i)
+    var hd = table_new_i64()
+    table_push(hd, (cnt >> 8) & 0xFF)
+    table_push(hd, cnt & 0xFF)
+    var rb: i64 = 0
+    var k: i64 = 0
+    while k < cnt {
+        if rights[k] != 0 { rb = rb | (1 << k) }
+        k = k + 1
+    }
+    table_push(hd, (rb >> 8) & 0xFF)
+    table_push(hd, rb & 0xFF)
+    out = bytes.concat(out, hd)
+    k = 0
+    while k < cnt {
+        out = bytes.concat(out, bytes.from_hex(sibs[k]))
+        k = k + 1
+    }
+    return out
+}
+
+// → (ok, i, count, rights 位图, sibs)
+pub func chunk_proof_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64, table<string>) {
+    var sibs: table<string> = []
+    if off < 0 || n < 8 || off + n > len(b) { return (0, 0, 0, 0, sibs) }
+    var idx = bytes.from_u32_be(b, off)
+    var cnt = bytes.from_u16_be(b, off + 4)
+    var rb = bytes.from_u16_be(b, off + 6)
+    if n < 8 + cnt * 32 { return (0, 0, 0, 0, sibs) }
+    var k: i64 = 0
+    while k < cnt {
+        table_push(sibs, bytes.to_hex(bytes.slice(b, off + 8 + k * 32, off + 8 + k * 32 + 32)))
+        k = k + 1
+    }
+    return (1, idx, cnt, rb, sibs)
+}
+
+// rights 位图 → 表
+pub func proof_rights(rb: i64, cnt: i64) -> table<i64> {
+    var out = table_new_i64()
+    var k: i64 = 0
+    while k < cnt {
+        if ((rb >> k) & 1) != 0 {
+            table_push(out, 1)
+        } else {
+            table_push(out, 0)
+        }
+        k = k + 1
+    }
+    return out
+}
+
+pub func chunk_proof_frame(stream_id: i64, seq: i64, body: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_chunk_proof(), prot, stream_id, seq, body, table_new_i64())
 }
 
 }   // namespace tink3

@@ -1822,5 +1822,45 @@ func hex(cv: table<i64>) -> string {
     return out
 }
 
+// ---------- CAS 验证流（tink v3 §8）：叶 / 父 CV 封装 ----------
+
+// 叶 CV：chunk（off/clen；counter = chunk 序号；非根）→ 32 字节小端 hex
+pub func cas_leaf_hex(msg: string, off: i64, clen: i64, counter: i64) -> string {
+    return hex_cv(chunk_cv(msg, len(msg), off, clen, counter, false))
+}
+
+// hex 字符 → 4 位值
+func cas_nib(c: string) -> i64 {
+    var v = char_code(c)
+    if v >= 48 && v <= 57 { return v - 48 }
+    if v >= 97 && v <= 102 { return v - 97 + 10 }
+    if v >= 65 && v <= 70 { return v - 65 + 10 }
+    return 0
+}
+
+// 64 字符 hex → B3Cv（8 字，逐字小端；与 hex_cv 互逆）
+func cas_cv_from_hex(h: string) -> B3Cv {
+    var w = table_new_i64()
+    var k: i64 = 0
+    while k < 8 {
+        var b0 = cas_nib(str_char(h, k * 8)) * 16 + cas_nib(str_char(h, k * 8 + 1))
+        var b1 = cas_nib(str_char(h, k * 8 + 2)) * 16 + cas_nib(str_char(h, k * 8 + 3))
+        var b2 = cas_nib(str_char(h, k * 8 + 4)) * 16 + cas_nib(str_char(h, k * 8 + 5))
+        var b3 = cas_nib(str_char(h, k * 8 + 6)) * 16 + cas_nib(str_char(h, k * 8 + 7))
+        table_push(w, b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+        k = k + 1
+    }
+    return B3Cv(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7])
+}
+
+// 父 CV：l/r 为 32 字节小端 hex；root = 顶层合并（PARENT|ROOT）否则 PARENT
+pub func cas_parent_hex(l_hex: string, r_hex: string, root: bool) -> string {
+    var l = cas_cv_from_hex(l_hex)
+    var r = cas_cv_from_hex(r_hex)
+    var fl: i64 = 4
+    if root { fl = 12 }
+    return hex_cv(parent_local(l, r, fl))
+}
+
 }   // namespace blake3
 

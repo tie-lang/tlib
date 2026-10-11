@@ -1,0 +1,209 @@
+type tie<logic>
+// std/tink_v3_cas_probe.tie —— tink v3 内容与验证流探针（设计文档 §8 验收）
+// 覆盖：族哈希/树根（blake3 官方 3000B 向量；sha256 自建树 Python 镜像值）；叶列表/块数；
+//   叶路径证明与校验（3 叶/9 叶深树/单叶；逐块全验；块级篡改定位；错根拒绝）；链族
+//   （链根 KAT、前缀断点续算一致、篡改改变根）；content_id 构建/校验（三族）；
+//   GET/HAVE/PUT/CHUNK_PROOF 帧编解码 + 帧上路径验证；CAS 端到端（GET(range)+验证+续传）。
+// 每项 PASS 打 `tinkv3c:<name>:OK`；失败 `tinkv3c:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3c:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+
+// 链根 KAT 冻结（2026-10-11 实跑固化）
+var ks_chain: string = "fv02Hemhomo5cvn6qa4FB20B38nhJyafskoi53yaKzgBHptu"
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3c:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3c:" + name + ":OK")
+    }
+}
+
+func pat_s(n: i64) -> string {
+    var sb = string_builder()
+    var i: i64 = 0
+    while i < n {
+        sb_append_byte(sb, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return sb_build(sb)
+}
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func b2s(t: table<i64>) -> string {
+    var sb = string_builder()
+    var i: i64 = 0
+    while i < len(t) {
+        sb_append_byte(sb, t[i] & 0xFF)
+        i = i + 1
+    }
+    return sb_build(sb)
+}
+
+func ssub(s: string, a: i64, b: i64) -> string {
+    var sb = string_builder()
+    var i: i64 = a
+    var lim = b
+    if lim > len(s) { lim = len(s) }
+    while i < lim {
+        sb_append_byte(sb, str_byte(s, i) & 0xFF)
+        i = i + 1
+    }
+    return sb_build(sb)
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+    var msgs = pat_s(3000)
+    var msg2 = pat_s(9000)
+    var small = pat_s(100)
+    var B3_3000 = "2285e439b7e4f97ba8ffddd68f8aff06a8ba2edbe908e0ef3aee03c002971afe"
+    var B3_ABC = "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+    var SHA_3000 = "f044b738a20f7a60f62e51dfa65f5622540744750f69e5372419f0827654fc36"
+
+    // ---- 1) 族哈希 / 树根 ----
+    expect(t3.fam_hash(1, "abc") == B3_ABC, "fam_blake3_abc")
+    expect(t3.cas_root(1, msgs) == B3_3000, "cas_root_blake3_3000")
+    expect(t3.cas_root(1, small) == t3.fam_hash(1, small), "cas_root_single")
+    expect(t3.cas_root(3, msgs) == SHA_3000, "cas_root_sha256_3000")
+    expect(t3.cas_root(1, msgs) != t3.cas_root(1, msg2), "cas_root_distinct")
+
+    // ---- 2) 叶列表 / 块数 ----
+    var lv = t3.cas_leaves(1, msgs)
+    expect(len(lv) == 3 && t3.cas_chunk_count(3000) == 3 && t3.cas_chunk_count(1024) == 1 && t3.cas_chunk_count(1025) == 2, "leaves_count")
+    expect(len(t3.cas_leaves(1, small)) == 1, "leaves_single")
+
+    // ---- 3) 证明与校验（3000B 三叶：逐块全验） ----
+    var v1: i64 = 0
+    var i: i64 = 0
+    while i < 3 {
+        var (p0, sibs, rights, rt) = t3.cas_proof(1, msgs, i)
+        var ch = ssub(msgs, i * 1024, i * 1024 + 1024)
+        v1 = v1 + t3.cas_verify_chunk(1, ch, i, sibs, rights, rt)
+        i = i + 1
+    }
+    expect(v1 == 3, "proof_verify_all_3")
+
+    // ---- 4) 9 叶深树（chunk 4 与 7） ----
+    var (q0, qs, qr, qroot) = t3.cas_proof(1, msg2, 4)
+    var (q1, qs2, qr2, qroot2) = t3.cas_proof(1, msg2, 7)
+    var ch4 = ssub(msg2, 4096, 5120)
+    var ch7 = ssub(msg2, 7168, 8192)
+    expect(q0 == 1 && qroot == t3.cas_root(1, msg2) && t3.cas_verify_chunk(1, ch4, 4, qs, qr, qroot) == 1, "proof_deep_4")
+    expect(q1 == 1 && t3.cas_verify_chunk(1, ch7, 7, qs2, qr2, qroot2) == 1, "proof_deep_7")
+
+    // ---- 5) 篡改与错根 ----
+    var (r0, rs, rr, rroot) = t3.cas_proof(1, msgs, 1)
+    var chb = t3.cas_chunk_slice(pat(3000), 1)
+    chb[0] = (chb[0] ^ 0xFF) & 0xFF
+    expect(t3.cas_verify_chunk(1, b2s(chb), 1, rs, rr, rroot) == 0, "proof_tamper_reject")
+    expect(t3.cas_verify_chunk(1, ssub(msgs, 1024, 2048), 1, rs, rr, B3_ABC) == 0, "proof_wrong_root")
+
+    // ---- 6) 单叶证明 ----
+    var (s0, ss, sr, sroot) = t3.cas_proof(1, small, 0)
+    expect(s0 == 1 && len(ss) == 0 && sroot == t3.fam_hash(1, small), "proof_single_leaf")
+    expect(t3.cas_verify_chunk(1, small, 0, ss, sr, sroot) == 1, "single_leaf_verify")
+    var bads = pat(100)
+    bads[0] = (bads[0] ^ 0xFF) & 0xFF
+    expect(t3.cas_verify_chunk(1, b2s(bads), 0, ss, sr, sroot) == 0, "single_leaf_tamper")
+
+    // ---- 7) SHA-256 树证明 ----
+    var (t0, tsib, tr, troot) = t3.cas_proof(3, msgs, 1)
+    expect(t0 == 1 && troot == SHA_3000 && t3.cas_verify_chunk(3, ssub(msgs, 1024, 2048), 1, tsib, tr, troot) == 1, "proof_sha256")
+    var shb = t3.cas_chunk_slice(pat(3000), 1)
+    shb[5] = (shb[5] ^ 0x01) & 0xFF
+    expect(t3.cas_verify_chunk(3, b2s(shb), 1, tsib, tr, troot) == 0, "proof_sha256_tamper")
+
+    // ---- 8) 链族（algo 2） ----
+    var cr = t3.chain_root(2, msgs)
+    println("KAT-CHAIN3000:" + cr)
+    if len(ks_chain) > 0 {
+        expect(cr == ks_chain, "chain_kat_frozen")
+    }
+    var (cst, cpos) = t3.chain_prefix(2, msgs, 2048)
+    var cres = t3.chain_step(2, cst, ssub(msgs, 2048, 3000))
+    expect(cpos == 2048 && cres == cr, "chain_resume_consistent")
+    var (cst1, cpos1) = t3.chain_prefix(2, msgs, 1024)
+    var cstep1 = t3.chain_step(2, cst1, ssub(msgs, 1024, 2048))
+    expect(cpos1 == 1024 && cstep1 == cst, "chain_stepwise")
+    var tb = t3.cas_chunk_slice(pat(3000), 1)
+    tb[1] = (tb[1] ^ 0x80) & 0xFF
+    var crbad = t3.chain_step(2, cst1, b2s(tb))
+    var cbad2 = t3.chain_step(2, crbad, ssub(msgs, 2048, 3000))
+    expect(cbad2 != cr && len(cr) == 48, "chain_tamper_detected")
+
+    // ---- 9) content_id ----
+    var cid1 = t3.cas_cid(1, msgs)
+    var (id0, ida, idd, idl, idt) = t3.cid_scan(cid1, 0)
+    expect(id0 == 1 && ida == 1 && idl == 32 && idt == 34, "cid_make_blake3")
+    expect(t3.cas_verify_cid(1, msgs, cid1, 0) == 1, "cid_verify_ok")
+    var cid3 = t3.cas_cid(3, msgs)
+    expect(t3.cas_verify_cid(3, msgs, cid3, 0) == 1, "cid_verify_sha256")
+    var cid2 = t3.cas_cid(2, msgs)
+    var (j0, ja, jd, jl, jt) = t3.cid_scan(cid2, 0)
+    expect(j0 == 1 && ja == 2 && jl == 48, "cid_make_tsha2")
+    expect(t3.cas_verify_cid(2, msgs, cid2, 0) == 1, "cid_verify_tsha2")
+    expect(t3.cas_verify_cid(1, "other", cid1, 0) == 0, "cid_verify_mismatch")
+
+    // ---- 10) 帧编解码 ----
+    var gf = t3.get_frame(0, 1, cid1, 1024, 512, crc)
+    var (f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10) = t3.frame_view(gf, 0)
+    var (g0, g1, g2, g3, g4) = t3.get_scan(gf, f5, f6)
+    expect(f0 == 1 && f1 == t3.ft_get() && g0 == 1 && g2 == 34 && g3 == 1024 && g4 == 512, "get_frame_codec")
+    var hf = t3.have_frame(0, 2, cid1, crc)
+    var (h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10) = t3.frame_view(hf, 0)
+    expect(h0 == 1 && h1 == t3.ft_have() && t3.cas_verify_cid(1, msgs, hf, h5) == 1, "have_frame_codec")
+    var pf = t3.put_frame(0, 3, cid1, crc)
+    var (k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10) = t3.frame_view(pf, 0)
+    expect(k0 == 1 && k1 == t3.ft_put(), "put_frame_codec")
+    var (m0, msib, mr, mroot) = t3.cas_proof(1, msgs, 2)
+    var pbody = t3.chunk_proof_body(2, msib, mr)
+    var proof_frame = t3.chunk_proof_frame(0, 4, pbody, crc)
+    var (n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10) = t3.frame_view(proof_frame, 0)
+    var (w0, w1, w2, w3, wsibs) = t3.chunk_proof_scan(proof_frame, n5, n6)
+    var wrights = t3.proof_rights(w3, w2)
+    var ch2 = ssub(msgs, 2048, 3000)
+    expect(n0 == 1 && n1 == t3.ft_chunk_proof() && w0 == 1 && w1 == 2 && t3.cas_verify_chunk(1, ch2, w1, wsibs, wrights, mroot) == 1, "proof_frame_verify")
+
+    // ---- 11) CAS 端到端 + 断点续传 + 篡改定位 ----
+    var blob = pat(3000)
+    var got_all: i64 = 0
+    var verified: i64 = 0
+    var ci2: i64 = 0
+    while ci2 < 3 {
+        var piece = t3.cas_get(blob, ci2 * 1024, 1024)
+        var (vok, vs, vr2, vroot) = t3.cas_proof(1, msgs, ci2)
+        verified = verified + t3.cas_verify_chunk(1, b2s(piece), ci2, vs, vr2, vroot)
+        got_all = got_all + len(piece)
+        ci2 = ci2 + 1
+    }
+    expect(verified == 3 && got_all == 3000, "cas_resume_e2e")
+    var bad2 = t3.cas_get(blob, 1024, 1024)
+    bad2[7] = (bad2[7] ^ 0x40) & 0xFF
+    var (z0, zs, zr, zroot) = t3.cas_proof(1, msgs, 1)
+    expect(t3.cas_verify_chunk(1, b2s(bad2), 1, zs, zr, zroot) == 0, "cas_tamper_located")
+    expect(t3.cas_verify_cid(1, msgs, cid1, 0) == 1, "cas_full_verify")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3c:ALL:PASS")
+    } else {
+        println("tinkv3c:ALL:FAIL")
+    }
+    return g_rc
+}
