@@ -1,0 +1,158 @@
+type tie<logic>
+// std/tink_v3_fc_probe.tie —— tink v3 流控与调度探针（设计文档 §5.4/§5.5 验收）
+// 覆盖：MAX_DATA/MAX_STREAM_DATA/DATA_BLOCKED/STREAM_BLOCKED 编解码（含短体拒绝）；
+//   双层额度引擎（流级耗尽/连接级耗尽/单向与双向恢复/未知流）；BLOCKED 通告载荷；
+//   优先级调度序（URGENT/控制优先 + 加权配额精确序列）；饿死断言（×3 轮）。
+// 每项 PASS 打 `tinkv3f:<name>:OK`；失败 `tinkv3f:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3f:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3f:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3f:" + name + ":OK")
+    }
+}
+
+func main() -> i64 {
+    var crc = t3.fl_crc()
+
+    // ---- 1) 流控帧编解码 ----
+    var mf = t3.max_data_frame(0, 0x1122334455667788, crc)
+    var (a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) = t3.frame_view(mf, 0)
+    expect(a0 == 1 && a1 == t3.ft_max_data() && a9 == 1 && t3.credit_of(mf, a5, a6) == 0x1122334455667788, "max_data_codec")
+    var sf = t3.max_stream_data_frame(1, 7, 0x0102030405060708, crc)
+    var (b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10) = t3.frame_view(sf, 0)
+    var (bo, bst, bcr) = t3.stream_credit_of(sf, b5, b6)
+    expect(b0 == 1 && b1 == t3.ft_max_stream_data() && bo == 1 && bst == 7 && bcr == 0x0102030405060708, "max_stream_data_codec")
+    var df = t3.data_blocked_frame(2, 1000, crc)
+    var (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) = t3.frame_view(df, 0)
+    expect(c0 == 1 && c1 == t3.ft_data_blocked() && t3.credit_of(df, c5, c6) == 1000, "data_blocked_codec")
+    var kf = t3.stream_blocked_frame(3, 7, 2048, crc)
+    var (d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10) = t3.frame_view(kf, 0)
+    var (do1, dst, dcr) = t3.stream_credit_of(kf, d5, d6)
+    expect(d0 == 1 && d1 == t3.ft_stream_blocked() && do1 == 1 && dst == 7 && dcr == 2048, "stream_blocked_codec")
+    expect(t3.credit_of(mf, a5, 4) == -1, "credit_short")
+    var (so1, ss1, sc1) = t3.stream_credit_of(sf, b5, 8)
+    expect(so1 == 0, "stream_credit_short")
+
+    // ---- 2) 双层额度引擎 ----
+    var conn = t3.fc_conn_new(100)
+    var streams = table_new_i64()
+    t3.fc_stream_add(streams, 1, 30)
+    t3.fc_stream_add(streams, 2, 30)
+    expect(t3.fc_can(conn, streams, 1, 20) == 1, "fc_can_stream1")
+    t3.fc_use(conn, streams, 1, 20)
+    expect(t3.fc_used_stream(streams, 1) == 20 && t3.fc_used_conn(conn) == 20, "fc_used_after_20")
+    expect(t3.fc_can(conn, streams, 1, 15) == 0, "fc_stream_block")
+    expect(t3.fc_can(conn, streams, 2, 25) == 1, "fc_can_stream2")
+    t3.fc_use(conn, streams, 2, 25)
+    expect(t3.fc_used_conn(conn) == 45, "fc_used_conn_45")
+    expect(t3.fc_can(conn, streams, 2, 30) == 0, "fc_stream2_block")
+    expect(t3.fc_can(conn, streams, 2, 5) == 1, "fc_stream2_exact_fit")
+    t3.fc_use(conn, streams, 2, 5)
+    expect(t3.fc_used_conn(conn) == 50 && t3.fc_used_stream(streams, 2) == 30, "fc_used_50")
+    expect(t3.fc_can(conn, streams, 1, 100) == 0, "fc_conn_block")
+    t3.fc_grant_conn(conn, 100)
+    expect(t3.fc_can(conn, streams, 2, 5) == 0, "fc_grant_conn_stream_still_blocked")
+    t3.fc_grant_stream(streams, 2, 10)
+    expect(t3.fc_can(conn, streams, 2, 5) == 1, "fc_grant_stream_resumes")
+    expect(t3.fc_can(conn, streams, 9, 1) == 0, "fc_unknown_stream_block")
+    var blk = t3.stream_blocked_frame(5, 2, 30, crc)
+    var (e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10) = t3.frame_view(blk, 0)
+    var (eo1, est, ecr) = t3.stream_credit_of(blk, e5, e6)
+    expect(e0 == 1 && eo1 == 1 && est == 2 && ecr == 30, "fc_blocked_payload")
+
+    // ---- 3) 调度序（精确序列：2×8, 0×1, 1×4, 4×3, 3×2） ----
+    var sids = table_new_i64()
+    var prios = table_new_i64()
+    var urgs = table_new_i64()
+    var pends = table_new_i64()
+    var i: i64 = 0
+    table_push(sids, 0)
+    table_push(prios, 0)
+    table_push(urgs, 0)
+    table_push(pends, 5)
+    table_push(sids, 1)
+    table_push(prios, 3)
+    table_push(urgs, 0)
+    table_push(pends, 10)
+    table_push(sids, 2)
+    table_push(prios, 7)
+    table_push(urgs, 1)
+    table_push(pends, 24)
+    table_push(sids, 3)
+    table_push(prios, 1)
+    table_push(urgs, 0)
+    table_push(pends, 2)
+    table_push(sids, 4)
+    table_push(prios, 2)
+    table_push(urgs, 0)
+    table_push(pends, 3)
+    var order = t3.sched_round(sids, prios, urgs, pends)
+    var expq = table_new_i64()
+    while i < 8 {
+        table_push(expq, 2)
+        i = i + 1
+    }
+    table_push(expq, 0)
+    i = 0
+    while i < 4 {
+        table_push(expq, 1)
+        i = i + 1
+    }
+    i = 0
+    while i < 3 {
+        table_push(expq, 4)
+        i = i + 1
+    }
+    table_push(expq, 3)
+    table_push(expq, 3)
+    var same: bool = len(order) == len(expq)
+    i = 0
+    while i < len(order) {
+        if order[i] != expq[i] { same = false }
+        i = i + 1
+    }
+    expect(same, "sched_exact_order")
+
+    // ---- 4) 饿死断言（每轮非空流至少一次 ×3 轮） ----
+    var star_ok: bool = true
+    var r: i64 = 0
+    while r < 3 {
+        var o2 = t3.sched_round(sids, prios, urgs, pends)
+        var roundcnt = table_new_i64()
+        i = 0
+        while i < 5 {
+            table_push(roundcnt, 0)
+            i = i + 1
+        }
+        i = 0
+        while i < len(o2) {
+            var sid = o2[i]
+            roundcnt[sid] = roundcnt[sid] + 1
+            i = i + 1
+        }
+        i = 0
+        while i < 5 {
+            if roundcnt[i] < 1 { star_ok = false }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    expect(star_ok, "starvation_free")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3f:ALL:PASS")
+    } else {
+        println("tinkv3f:ALL:FAIL")
+    }
+    return g_rc
+}

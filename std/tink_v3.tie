@@ -1170,4 +1170,160 @@ pub func batch_frame(stream_id: i64, seq: i64, frames: table<i64>, prot: i64) ->
     return frame_encode(ft_batch(), prot, stream_id, seq, batch_pack(frames), table_new_i64())
 }
 
+// ==================== 流控与调度（§5.4/§5.5） ====================
+// 双层额度：连接级 MAX_DATA / DATA_BLOCKED；流级 MAX_STREAM_DATA / STREAM_BLOCKED。
+// 额度 = 信用字节数（u64 域，以 i64 位型承载）；发送方未确认在途 ≤ 额度；
+// 接收方消费后补发 MAX_* 追加额度；DATAGRAM 不计流控（无重传队列；速率由 CC 约束）。
+// 初始建议：1 MiB/流、8 MiB/连接（调用方参数化）。
+// 调度：优先级 0..7 + URGENT；控制流（stream 0）视同 URGENT。
+//   参考调度：URGENT/控制优先（优先级降序），其余（优先级降序）；
+//   每流本轮服务数 = min(待发, 优先级+1) ⇒ 非空流每轮 ≥1 次（饿不死）。
+
+// ---------- 流控帧编解码 ----------
+
+// MAX_DATA（连接控制流，credit u64）
+pub func max_data_frame(seq: i64, credit: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_max_data(), prot, 0, seq, bytes.to_u64_be(credit), table_new_i64())
+}
+
+// MAX_STREAM_DATA（body = 目标流 u32 + credit u64）
+pub func max_stream_data_frame(seq: i64, target: i64, credit: i64, prot: i64) -> table<i64> {
+    var body = bytes.concat(bytes.to_u32_be(target), bytes.to_u64_be(credit))
+    return frame_encode(ft_max_stream_data(), prot, 0, seq, body, table_new_i64())
+}
+
+// DATA_BLOCKED（credit u64）
+pub func data_blocked_frame(seq: i64, credit: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_data_blocked(), prot, 0, seq, bytes.to_u64_be(credit), table_new_i64())
+}
+
+// STREAM_BLOCKED（body = 目标流 u32 + credit u64）
+pub func stream_blocked_frame(seq: i64, target: i64, credit: i64, prot: i64) -> table<i64> {
+    var body = bytes.concat(bytes.to_u32_be(target), bytes.to_u64_be(credit))
+    return frame_encode(ft_stream_blocked(), prot, 0, seq, body, table_new_i64())
+}
+
+// credit u64 读取（≥8 字节；否则 -1）
+pub func credit_of(b: table<i64>, off: i64, n: i64) -> i64 {
+    if off < 0 || n < 8 || off + 8 > len(b) { return -1 }
+    return bytes.from_u64_be(b, off)
+}
+
+// (目标流 u32 + credit u64) 读取 → (ok, stream, credit)
+pub func stream_credit_of(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64) {
+    if off < 0 || n < 12 || off + 12 > len(b) { return (0, 0, 0) }
+    return (1, bytes.from_u32_be(b, off), bytes.from_u64_be(b, off + 4))
+}
+
+// ---------- 双层流控引擎 ----------
+
+// 连接级状态：[limit, used]
+pub func fc_conn_new(limit: i64) -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, limit)
+    table_push(st, 0)
+    return st
+}
+
+// 流级表（调用方持有）：步长 3：[sid, limit, used]
+pub func fc_stream_add(ref streams: table<i64>, sid: i64, limit: i64) {
+    table_push(streams, sid)
+    table_push(streams, limit)
+    table_push(streams, 0)
+}
+
+func fc_find(streams: table<i64>, sid: i64) -> i64 {
+    var n = len(streams) / 3
+    var i: i64 = 0
+    while i < n {
+        if streams[i * 3] == sid { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// 可发 n 字节？（1/0；连接与流任一不足 / 未知流 → 0）
+pub func fc_can(conn: table<i64>, streams: table<i64>, sid: i64, n: i64) -> i64 {
+    var k = fc_find(streams, sid)
+    if k < 0 { return 0 }
+    if conn[1] + n > conn[0] { return 0 }
+    if streams[k * 3 + 2] + n > streams[k * 3 + 1] { return 0 }
+    return 1
+}
+
+// 提交发送 n 字节（记账；调用方先 fc_can）
+pub func fc_use(ref conn: table<i64>, ref streams: table<i64>, sid: i64, n: i64) {
+    var k = fc_find(streams, sid)
+    conn[1] = conn[1] + n
+    if k >= 0 { streams[k * 3 + 2] = streams[k * 3 + 2] + n }
+}
+
+// 追加额度（MAX_DATA / MAX_STREAM_DATA 的应用点）
+pub func fc_grant_conn(ref conn: table<i64>, credit: i64) {
+    conn[0] = conn[0] + credit
+}
+
+pub func fc_grant_stream(ref streams: table<i64>, sid: i64, credit: i64) {
+    var k = fc_find(streams, sid)
+    if k >= 0 { streams[k * 3 + 1] = streams[k * 3 + 1] + credit }
+}
+
+pub func fc_used_conn(conn: table<i64>) -> i64 { return conn[1] }
+
+pub func fc_used_stream(streams: table<i64>, sid: i64) -> i64 {
+    var k = fc_find(streams, sid)
+    if k < 0 { return -1 }
+    return streams[k * 3 + 2]
+}
+
+// ---------- 优先级调度 ----------
+
+// 本轮调度序（sid 可重复 = 服务多次）：见文件头调度说明。
+pub func sched_round(sids: table<i64>, prios: table<i64>, urgents: table<i64>, pendings: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    var n = len(sids)
+    var used = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(used, 0)
+        i = i + 1
+    }
+    var pass: i64 = 0
+    while pass < 2 {
+        var progressed: bool = true
+        while progressed {
+            progressed = false
+            var best: i64 = -1
+            i = 0
+            while i < n {
+                var is_urg: bool = urgents[i] != 0 || sids[i] == 0
+                var in_pass: bool = false
+                if pass == 0 {
+                    in_pass = is_urg
+                } else {
+                    in_pass = !is_urg
+                }
+                if used[i] == 0 && in_pass {
+                    if best < 0 || prios[i] > prios[best] { best = i }
+                }
+                i = i + 1
+            }
+            if best >= 0 {
+                used[best] = 1
+                progressed = true
+                var quota = prios[best] + 1
+                var cnt = pendings[best]
+                if cnt > quota { cnt = quota }
+                var j: i64 = 0
+                while j < cnt {
+                    table_push(out, sids[best])
+                    j = j + 1
+                }
+            }
+        }
+        pass = pass + 1
+    }
+    return out
+}
+
 }   // namespace tink3
