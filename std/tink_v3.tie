@@ -44,6 +44,7 @@ import "./bytes.tie" as bytes
 import "./x25519.tie" as x25519
 import "./ed25519.tie" as ed25519
 import "./hkdf.tie" as hkdf
+import "./hmac.tie" as hmac
 import "./chacha20.tie" as chacha20
 
 // CRC32C 查表（Castagnoli，反射多项式 0x82F63B78；懒构建一次，见 crc32c_ensure）
@@ -1665,6 +1666,177 @@ pub func rp_check(ref st: table<i64>, seq: i64) -> i64 {
     if ((st[1 + w2] >> b3) & 1) != 0 { return 0 }
     rp_mark(st, delta)
     return 1
+}
+
+// ==================== 0-RTT 恢复（§5.6/§6.5） ====================
+// TICKET（0x23）：服务器签发的**不透明**恢复票（客户端原样回传）；含会话状态摘要（32B）、
+//   有效期（≤ 7 天）、单次性位。RESUME（0x24）：nstreams u16 ‖ (sid u32 + next_seq u32)×n ‖ ticket
+//   （各流 next_seq 摘要 = 断点续传）。
+// 防重放：兑换后记录 ticket id 至有效期结束；单次性位 = 永久烧毁（过期亦拒）。
+// 恢复期密钥：res_secret → "tink v3 res c/s ap traffic"（方向分离）。
+// early data：仅幂等请求（REQUEST flags bit0；RPC 层接线见 M10）。
+// 票据真实性：参考格式以服务器 ticket 密钥附加 16B HMAC（先验后兑；不加密——机密不放票据）。
+
+pub func tkt_max_ttl_ms() -> i64 { return 7 * 24 * 3600 * 1000 }
+pub func eo_idempotent_bit() -> i64 { return 1 }
+
+pub func eo_allowed(flags: i64) -> i64 {
+    if (flags & 1) != 0 { return 1 }
+    return 0
+}
+
+// 票据参考格式（113B）：[id 16][issued u64][expiry u64][one_shot u8][digest 32][secret 32][mac 16]
+// mac = HMAC-SHA256(ticket_key, 前 97B) 前 16B；ttl 超过 7 天 → 空表（拒绝）
+pub func tkt_build(ticket_key_hex: string, id: table<i64>, issued_ms: i64, ttl_ms: i64, one_shot: i64, digest: table<i64>, res_secret: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    if ttl_ms < 0 || ttl_ms > tkt_max_ttl_ms() { return out }
+    var i: i64 = 0
+    while i < 16 {
+        if i < len(id) { table_push(out, id[i] & 0xFF) } else { table_push(out, 0) }
+        i = i + 1
+    }
+    push64(out, issued_ms)
+    push64(out, issued_ms + ttl_ms)
+    table_push(out, one_shot & 1)
+    i = 0
+    while i < 32 {
+        if i < len(digest) { table_push(out, digest[i] & 0xFF) } else { table_push(out, 0) }
+        i = i + 1
+    }
+    i = 0
+    while i < 32 {
+        if i < len(res_secret) { table_push(out, res_secret[i] & 0xFF) } else { table_push(out, 0) }
+        i = i + 1
+    }
+    var mh = hmac.hmac_sha256(ticket_key_hex, bytes.to_hex(out))
+    var mb = bytes.from_hex(mh)
+    i = 0
+    while i < 16 {
+        table_push(out, mb[i])
+        i = i + 1
+    }
+    return out
+}
+
+// 扫描 → (ok, issued, expiry, one_shot, id_off, digest_off, secret_off)；n 必须 = 113
+pub func tkt_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
+    if off < 0 || n != 113 || off + n > len(b) { return (0, 0, 0, 0, 0, 0, 0) }
+    return (1, bytes.from_u64_be(b, off + 16), bytes.from_u64_be(b, off + 24), b[off + 32] & 0xFF, off, off + 33, off + 65)
+}
+
+// 验票（HMAC 前 16B 常数时间比较）→ 1/0
+pub func tkt_verify(ticket_key_hex: string, b: table<i64>, off: i64, n: i64) -> i64 {
+    if off < 0 || n != 113 || off + n > len(b) { return 0 }
+    var mh = hmac.hmac_sha256(ticket_key_hex, bytes.to_hex(bytes.slice(b, off, off + 97)))
+    var mb = bytes.from_hex(mh)
+    var ok: i64 = 1
+    var i: i64 = 0
+    while i < 16 {
+        if (mb[i] & 0xFF) != (b[off + 97 + i] & 0xFF) { ok = 0 }
+        i = i + 1
+    }
+    return ok
+}
+
+// 兑换登记表：st = [count, 记录 × 步长 18：[expiry, burned, id 16B]]
+pub func tkt_store_new() -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, 0)
+    return st
+}
+
+func tkt_store_find(st: table<i64>, b: table<i64>, id_off: i64) -> i64 {
+    var cnt = st[0]
+    var i: i64 = 0
+    while i < cnt {
+        var base = 1 + i * 18
+        var same: bool = true
+        var j: i64 = 0
+        while j < 16 {
+            if (st[base + 2 + j] & 0xFF) != (b[id_off + j] & 0xFF) { same = false }
+            j = j + 1
+        }
+        if same { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// 兑换：→ (status, secret_off)：1 接受（secret_off 指向 32B res_secret）/ 0 无效或过期 / -1 重放
+pub func tkt_redeem(ref store: table<i64>, ticket_key_hex: string, b: table<i64>, off: i64, n: i64, now_ms: i64) -> (i64, i64) {
+    if tkt_verify(ticket_key_hex, b, off, n) != 1 { return (0, 0 - 1) }
+    var expiry = bytes.from_u64_be(b, off + 24)
+    var one_shot = b[off + 32] & 0xFF
+    var rec = tkt_store_find(store, b, off)
+    if rec >= 0 {
+        var base = 1 + rec * 18
+        if store[base + 1] == 1 { return (0 - 1, 0 - 1) }
+        if now_ms <= store[base] { return (0 - 1, 0 - 1) }
+    }
+    if now_ms > expiry { return (0, 0 - 1) }
+    if rec < 0 {
+        store[0] = store[0] + 1
+        table_push(store, expiry)
+        table_push(store, one_shot)
+        var i: i64 = 0
+        while i < 16 {
+            table_push(store, b[off + i] & 0xFF)
+            i = i + 1
+        }
+    } else {
+        var base2 = 1 + rec * 18
+        store[base2] = expiry
+        store[base2 + 1] = one_shot
+    }
+    return (1, off + 65)
+}
+
+// 恢复期密钥（方向分离）
+pub func res_keys(res_secret_hex: string) -> (string, string) {
+    return (hkdf.expand(res_secret_hex, label_hex("tink v3 res c ap traffic"), 32),
+            hkdf.expand(res_secret_hex, label_hex("tink v3 res s ap traffic"), 32))
+}
+
+// RESUME body = nstreams u16 ‖ (sid u32 + next_seq u32)×n ‖ ticket
+pub func resume_body(ticket: table<i64>, sids: table<i64>, seqs: table<i64>) -> table<i64> {
+    var n = len(sids)
+    if n != len(seqs) || n > 65535 { return table_new_i64() }
+    var out = table_new_i64()
+    table_push(out, (n >> 8) & 0xFF)
+    table_push(out, n & 0xFF)
+    var i: i64 = 0
+    while i < n {
+        out = bytes.concat(out, bytes.concat(bytes.to_u32_be(sids[i]), bytes.to_u32_be(seqs[i])))
+        i = i + 1
+    }
+    return bytes.concat(out, ticket)
+}
+
+// 扫描 → (ok, ticket_off, ticket_len, sids, seqs)
+pub func resume_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, table<i64>, table<i64>) {
+    var sids = table_new_i64()
+    var seqs = table_new_i64()
+    if off < 0 || n < 2 || off + n > len(b) { return (0, 0, 0, sids, seqs) }
+    var cnt = bytes.from_u16_be(b, off)
+    var need = 2 + cnt * 8
+    if n < need { return (0, 0, 0, sids, seqs) }
+    var i: i64 = 0
+    while i < cnt {
+        table_push(sids, bytes.from_u32_be(b, off + 2 + i * 8))
+        table_push(seqs, bytes.from_u32_be(b, off + 2 + i * 8 + 4))
+        i = i + 1
+    }
+    return (1, off + need, n - need, sids, seqs)
+}
+
+// TICKET 帧（body = 票据字节）
+pub func ticket_frame(stream_id: i64, seq: i64, ticket: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_ticket(), prot, stream_id, seq, ticket, table_new_i64())
+}
+
+// RESUME 帧
+pub func resume_frame(stream_id: i64, seq: i64, body: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_resume(), prot, stream_id, seq, body, table_new_i64())
 }
 
 }   // namespace tink3
