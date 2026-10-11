@@ -1,0 +1,103 @@
+type tie<logic>
+// std/tink_v3_relay_probe.tie —— tink v3 中继与迁移探针（设计文档 §4.6/§5.6 验收）
+// 覆盖：FORWARD 编解码（target ‖ 内层帧、内层字节保真）；relay 不解密载荷（只读 target、
+// 密封内层照转、目的端可解）；转发接受/拒绝（已知目标接受；自身/未知拒绝；0x06xx 码）；
+// CONN_ID 扩展区往返；迁移接管（同 ID + 已认证 → 接受 epoch+1；ID 不符/未认证 → 拒绝）；
+// 端到端（迁移接管后转发吞吐链：外 FORWARD → 内 FORWARD → 密封 MESSAGE 解密还原）。
+// 每项 PASS 打 `tinkv3x:<name>:OK`；失败 `tinkv3x:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3x:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3x:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3x:" + name + ":OK")
+    }
+}
+
+// relay 判决（演示规则）：目标是自身 → 拒（防环）；目标在已知集 → 转发；否则 → 拒（不可达）
+func relay_ok(target_key: string, self_key: string, known: table<string>) -> i64 {
+    if target_key == self_key { return 0 }
+    var i: i64 = 0
+    while i < len(known) {
+        if known[i] == target_key { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+    var K = "0973af3e5226b2317a9aafa2b8f1520c22ab57d3ad0e0ef27b2225e1ad5b6c6b"
+    var tgt = t3.pid_make(1, bytes.fill(16, 0xAB))
+    var me = t3.pid_make(1, bytes.fill(16, 0xCD))
+    var unknown = t3.pid_make(1, bytes.fill(16, 0xEF))
+    var inner = t3.msg_frame(bytes.from_hex("aabbcc"), 1, 7, crc)
+
+    // ---- 1) FORWARD 编解码 ----
+    var ff = t3.forward_frame(0, 1, tgt, inner, crc)
+    var (f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10) = t3.frame_view(ff, 0)
+    var (g0, g1, g2, g3, g4) = t3.forward_scan(ff, f5, f6)
+    expect(f0 == 1 && f1 == t3.ft_forward() && g0 == 1 && g2 == len(tgt) && g4 == len(inner), "forward_codec")
+    expect(bytes.to_hex(bytes.slice(ff, g3, g3 + g4)) == bytes.to_hex(inner), "forward_inner_bytes")
+
+    // ---- 2) relay 不解密（密封内层照转；目的端可解） ----
+    var sealed = t3.frame_seal(t3.ft_message(), 0, 1, 9, bytes.from_hex("deadbeef"), empty, K, 0, 0, 0)
+    var ff2 = t3.forward_frame(0, 2, tgt, sealed, crc)
+    var (m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10) = t3.frame_view(ff2, 0)
+    var (h0, h1t, h2t, h3t, h4t) = t3.forward_scan(ff2, m5, m6)
+    expect(h0 == 1 && bytes.to_hex(bytes.slice(ff2, h3t, h3t + h4t)) == bytes.to_hex(sealed), "relay_no_decrypt")
+    var (o1, p1, n1) = t3.frame_open(ff2, h3t, K, 0, 0, 0)
+    expect(o1 == 1 && bytes.to_hex(p1) == "deadbeef", "relay_dest_decrypts")
+
+    // ---- 3) 转发判决（已知/自身/未知） ----
+    var tgt_key = bytes.to_hex(tgt)
+    var me_key = bytes.to_hex(me)
+    var unk_key = bytes.to_hex(unknown)
+    var known: table<string> = []
+    table_push(known, tgt_key)
+    expect(relay_ok(tgt_key, me_key, known) == 1, "relay_accept_known")
+    expect(relay_ok(me_key, me_key, known) == 0, "relay_reject_self_loop")
+    expect(relay_ok(unk_key, me_key, known) == 0, "relay_reject_unknown")
+    expect(t3.err_target_unreachable() == 0x0601 && t3.err_forward_refused() == 0x0602, "relay_err_codes")
+
+    // ---- 4) CONN_ID 扩展区 + 迁移接管 ----
+    var cid = 0x0102030405060708
+    var ext = t3.ext_tlv_u64(t3.tlv_conn_id(), cid)
+    var cf = t3.frame_encode(t3.ft_datagram(), t3.fl_ext(), 0, 3, bytes.from_hex("77"), ext)
+    var (k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10) = t3.frame_view(cf, 0)
+    expect(k0 == 1 && t3.ext_u64(cf, k7, k8, t3.tlv_conn_id()) == cid, "conn_id_ext")
+    var mig = t3.mig_new(cid)
+    expect(t3.mig_takeover(mig, cid, 1) == 1 && mig[1] == 1, "mig_takeover")
+    expect(t3.mig_takeover(mig, cid, 1) == 1 && mig[1] == 2, "mig_takeover_again")
+    expect(t3.mig_takeover(mig, 99, 1) == 0, "mig_wrong_id")
+    expect(t3.mig_takeover(mig, cid, 0) == 0 && mig[1] == 2, "mig_unauth")
+    expect(t3.mig_takeover(mig, 0x0102030405060708, 1) == 1, "mig_boundary_id")
+
+    // ---- 5) 端到端：迁移接管 + 转发链（外 FORWARD → 内 FORWARD → 密封 MESSAGE 解密） ----
+    var mig2 = t3.mig_new(cid)
+    var pathframe = t3.frame_encode(t3.ft_forward(), t3.fl_ext(), 0, 5, t3.forward_body(tgt, ff2), ext)
+    var (q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10) = t3.frame_view(pathframe, 0)
+    var cid_read = t3.ext_u64(pathframe, q7, q8, t3.tlv_conn_id())
+    var acc = t3.mig_takeover(mig2, cid_read, 1)
+    var (s0, s1, s2, s3, s4) = t3.forward_scan(pathframe, q5, q6)
+    var (b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10) = t3.frame_view(pathframe, s3)
+    var (v0, v1, v2, v3, v4) = t3.forward_scan(pathframe, b5, b6)
+    var (w1, wp, wn) = t3.frame_open(pathframe, v3, K, 0, 0, 0)
+    expect(acc == 1 && s0 == 1 && b0 == 1 && v0 == 1 && w1 == 1 && bytes.to_hex(wp) == "deadbeef", "e2e_relay_chain_migrated")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3x:ALL:PASS")
+    } else {
+        println("tinkv3x:ALL:FAIL")
+    }
+    return g_rc
+}

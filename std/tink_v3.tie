@@ -2780,4 +2780,42 @@ pub func chunk_proof_frame(stream_id: i64, seq: i64, body: table<i64>, prot: i64
     return frame_encode(ft_chunk_proof(), prot, stream_id, seq, body, table_new_i64())
 }
 
+// ==================== 中继与迁移（§4.6/§5.6） ====================
+// FORWARD（0x60）：target peer_id ‖ 内层帧。relay **不解密载荷**（不解析内层、只读 target）；
+// 拒绝 → 0x06xx（TARGET_UNREACHABLE / FORWARD_REFUSED）。
+// 迁移：连接以 CONN_ID（TLV 1）标识；新路径同 CONN_ID 帧**经认证后**即接管（数据报绑定）；
+// 流绑定下迁移 = 重连 + RESUME（见 M8）。
+
+// target ‖ inner
+pub func forward_body(target: table<i64>, inner: table<i64>) -> table<i64> {
+    return bytes.concat(target, inner)
+}
+
+// → (ok, t_off, t_len, inner_off, inner_len)（t_* = 目标 peer_id 区间）
+pub func forward_scan(b: table<i64>, off: i64, n: i64) -> (i64, i64, i64, i64, i64) {
+    var (ok0, algo, do, dl, tot) = cid_scan(b, off)
+    if ok0 != 1 || n <= tot { return (0, 0, 0, 0, 0) }
+    return (1, off, tot, off + tot, n - tot)
+}
+
+pub func forward_frame(stream_id: i64, seq: i64, target: table<i64>, inner: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_forward(), prot, stream_id, seq, forward_body(target, inner), table_new_i64())
+}
+
+// CONN_ID 迁移状态：[conn_id, epoch]
+pub func mig_new(conn_id: i64) -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, conn_id)
+    table_push(st, 0)
+    return st
+}
+
+// 接管判定：1 = 接受（epoch+1）/ 0 = 拒绝（ID 不符或未认证）
+pub func mig_takeover(ref st: table<i64>, frame_conn_id: i64, authenticated: i64) -> i64 {
+    if st[0] != frame_conn_id { return 0 }
+    if authenticated != 1 { return 0 }
+    st[1] = st[1] + 1
+    return 1
+}
+
 }   // namespace tink3
