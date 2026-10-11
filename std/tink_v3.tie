@@ -1839,4 +1839,303 @@ pub func resume_frame(stream_id: i64, seq: i64, body: table<i64>, prot: i64) -> 
     return frame_encode(ft_resume(), prot, stream_id, seq, body, table_new_i64())
 }
 
+// ==================== 总线语义（§7/§4.4） ====================
+// REGISTER / LOOKUP / LOOKUP_REPLY / UNREGISTER / SUBSCRIBE / UNSUBSCRIBE / PUBLISH /
+// MULTICAST 编解码 + hub 最小实现（名字路由 / 通配订阅 / 扇出）。
+// hub 只做路由（不解析载荷）。名称/主题/过滤器 ≤ 255B（u8 长度前缀）；
+// peer_id = algo u8 + len u8 + digest（§6.6 同构）；通配 '*' 匹配任意串（含空）。
+// 条目：REGISTER=name‖caps u64；LOOKUP/SUBSCRIBE 等=name；PUBLISH/MULTICAST=name‖载荷；
+// LOOKUP_REPLY=count u16‖(pid‖alen u8+addr)×count。
+
+// --- 名称与名称体（LOOKUP/SUBSCRIBE/UNREGISTER 通用） ---
+
+pub func name_body(name: string) -> table<i64> {
+    var nb = bytes.from_ascii(name)
+    var out = table_new_i64()
+    var n = len(nb)
+    if n > 255 { return out }
+    table_push(out, n)
+    var i: i64 = 0
+    while i < n {
+        table_push(out, nb[i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+func u8str_scan(b: table<i64>, off: i64, n: i64) -> (i64, string) {
+    if off < 0 || n < 1 || off + n > len(b) { return (0, "") }
+    var nl = b[off] & 0xFF
+    if n < 1 + nl { return (0, "") }
+    return (1, bytes.to_ascii(bytes.slice(b, off + 1, off + 1 + nl)))
+}
+
+pub func lookup_scan(b: table<i64>, off: i64, n: i64) -> (i64, string) {
+    return u8str_scan(b, off, n)
+}
+
+pub func sub_scan(b: table<i64>, off: i64, n: i64) -> (i64, string) {
+    return u8str_scan(b, off, n)
+}
+
+// --- REGISTER ---
+
+pub func reg_body(name: string, cap: i64) -> table<i64> {
+    var nb = name_body(name)
+    if len(nb) == 0 { return nb }
+    return bytes.concat(nb, bytes.to_u64_be(cap))
+}
+
+pub func reg_scan(b: table<i64>, off: i64, n: i64) -> (i64, string, i64) {
+    if off < 0 || n < 9 || off + n > len(b) { return (0, "", 0) }
+    var nl = b[off] & 0xFF
+    if n < 1 + nl + 8 { return (0, "", 0) }
+    return (1, bytes.to_ascii(bytes.slice(b, off + 1, off + 1 + nl)), bytes.from_u64_be(b, off + 1 + nl))
+}
+
+pub func register_frame(stream_id: i64, seq: i64, name: string, cap: i64, prot: i64) -> table<i64> {
+    return frame_encode(ft_register(), prot, stream_id, seq, reg_body(name, cap), table_new_i64())
+}
+
+pub func lookup_frame(stream_id: i64, seq: i64, name: string, prot: i64) -> table<i64> {
+    return frame_encode(ft_lookup(), prot, stream_id, seq, name_body(name), table_new_i64())
+}
+
+pub func sub_frame(stream_id: i64, seq: i64, pattern: string, prot: i64) -> table<i64> {
+    return frame_encode(ft_subscribe(), prot, stream_id, seq, name_body(pattern), table_new_i64())
+}
+
+pub func unsub_frame(stream_id: i64, seq: i64, pattern: string, prot: i64) -> table<i64> {
+    return frame_encode(ft_unsubscribe(), prot, stream_id, seq, name_body(pattern), table_new_i64())
+}
+
+// --- peer_id 与 LOOKUP_REPLY ---
+
+pub func pid_make(algo: i64, digest: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    var dl = len(digest)
+    if dl > 255 { return out }
+    table_push(out, algo & 0xFF)
+    table_push(out, dl)
+    var i: i64 = 0
+    while i < dl {
+        table_push(out, digest[i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// pids：各 pid 的拼接字节；addrs 等长（条目 = pid ‖ alen u8 + addr）
+pub func reply_body(pids: table<i64>, addrs: table<string>) -> table<i64> {
+    var cnt = len(addrs)
+    if cnt > 65535 { return table_new_i64() }
+    var out = table_new_i64()
+    table_push(out, (cnt >> 8) & 0xFF)
+    table_push(out, cnt & 0xFF)
+    var p: i64 = 0
+    var i: i64 = 0
+    while i < cnt {
+        if p + 2 > len(pids) { return table_new_i64() }
+        var plen = 2 + (pids[p + 1] & 0xFF)
+        var q: i64 = 0
+        while q < plen {
+            table_push(out, pids[p + q] & 0xFF)
+            q = q + 1
+        }
+        p = p + plen
+        var ab = bytes.from_ascii(addrs[i])
+        var al = len(ab)
+        if al > 255 { return table_new_i64() }
+        table_push(out, al)
+        q = 0
+        while q < al {
+            table_push(out, ab[q] & 0xFF)
+            q = q + 1
+        }
+        i = i + 1
+    }
+    if p != len(pids) { return table_new_i64() }
+    return out
+}
+
+pub func reply_count(b: table<i64>, off: i64, n: i64) -> (i64, i64) {
+    if off < 0 || n < 2 || off + n > len(b) { return (0, 0) }
+    return (1, bytes.from_u16_be(b, off))
+}
+
+// 条目 i（从 0 起）→ (ok, algo, d_off, d_len, a_off, a_len)
+pub func reply_entry(b: table<i64>, off: i64, n: i64, i: i64) -> (i64, i64, i64, i64, i64, i64) {
+    if off < 0 || n < 2 || off + n > len(b) { return (0, 0, 0, 0, 0, 0) }
+    var cnt = bytes.from_u16_be(b, off)
+    if i < 0 || i >= cnt { return (0, 0, 0, 0, 0, 0) }
+    var p = off + 2
+    var end = off + n
+    var k: i64 = 0
+    while k < cnt {
+        if p + 2 > end { return (0, 0, 0, 0, 0, 0) }
+        var algo = b[p] & 0xFF
+        var d_len = b[p + 1] & 0xFF
+        var d_off = p + 2
+        p = p + 2 + d_len
+        if p + 1 > end { return (0, 0, 0, 0, 0, 0) }
+        var al = b[p] & 0xFF
+        var a_off = p + 1
+        p = p + 1 + al
+        if p > end { return (0, 0, 0, 0, 0, 0) }
+        if k == i { return (1, algo, d_off, d_len, a_off, al) }
+        k = k + 1
+    }
+    return (0, 0, 0, 0, 0, 0)
+}
+
+pub func reply_frame(stream_id: i64, seq: i64, pids: table<i64>, addrs: table<string>, prot: i64) -> table<i64> {
+    return frame_encode(ft_lookup_reply(), prot, stream_id, seq, reply_body(pids, addrs), table_new_i64())
+}
+
+// --- PUBLISH / MULTICAST ---
+
+pub func publish_body(topic: string, payload: table<i64>) -> table<i64> {
+    var nb = name_body(topic)
+    if len(nb) == 0 { return nb }
+    return bytes.concat(nb, payload)
+}
+
+pub func publish_frame(stream_id: i64, seq: i64, topic: string, payload: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_publish(), prot, stream_id, seq, publish_body(topic, payload), table_new_i64())
+}
+
+pub func multicast_frame(stream_id: i64, seq: i64, topic: string, payload: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_multicast(), prot, stream_id, seq, publish_body(topic, payload), table_new_i64())
+}
+
+// → (ok, topic, payload_off, payload_len)
+pub func publish_scan(b: table<i64>, off: i64, n: i64) -> (i64, string, i64, i64) {
+    if off < 0 || n < 1 || off + n > len(b) { return (0, "", 0, 0) }
+    var nl = b[off] & 0xFF
+    if n < 1 + nl { return (0, "", 0, 0) }
+    return (1, bytes.to_ascii(bytes.slice(b, off + 1, off + 1 + nl)), off + 1 + nl, n - 1 - nl)
+}
+
+// --- hub 最小实现（名字路由 / 通配订阅 / 扇出；删除 = 墓碑，peer/pattern 置 ""） ---
+
+pub func hub_register(ref names: table<string>, ref peers: table<string>, ref caps: table<i64>, name: string, peer: string, cap: i64) -> i64 {
+    var i: i64 = 0
+    while i < len(names) {
+        if names[i] == name {
+            peers[i] = peer
+            caps[i] = cap
+            return 0
+        }
+        i = i + 1
+    }
+    table_push(names, name)
+    table_push(peers, peer)
+    table_push(caps, cap)
+    return 1
+}
+
+pub func hub_unregister(ref names: table<string>, ref peers: table<string>, ref caps: table<i64>, name: string) -> i64 {
+    var hit: i64 = 0
+    var i: i64 = 0
+    while i < len(names) {
+        if names[i] == name && peers[i] != "" {
+            peers[i] = ""
+            caps[i] = 0
+            hit = 1
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// → (ok, peer, caps)
+pub func hub_lookup(names: table<string>, peers: table<string>, caps: table<i64>, name: string) -> (i64, string, i64) {
+    var i: i64 = 0
+    while i < len(names) {
+        if names[i] == name && peers[i] != "" {
+            return (1, peers[i], caps[i])
+        }
+        i = i + 1
+    }
+    return (0, "", 0)
+}
+
+pub func hub_subscribe(ref patterns: table<string>, ref sp: table<string>, pattern: string, peer: string) -> i64 {
+    table_push(patterns, pattern)
+    table_push(sp, peer)
+    return 1
+}
+
+pub func hub_unsubscribe(ref patterns: table<string>, ref sp: table<string>, pattern: string, peer: string) -> i64 {
+    var hit: i64 = 0
+    var i: i64 = 0
+    while i < len(patterns) {
+        if patterns[i] == pattern && sp[i] == peer {
+            patterns[i] = ""
+            sp[i] = ""
+            hit = 1
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// 通配匹配：'*' 任意串（含空）；其余字面（经典回溯，无早退）
+pub func topic_match(pattern: string, topic: string) -> i64 {
+    var m = str_len(pattern)
+    var n = str_len(topic)
+    var pi: i64 = 0
+    var ti: i64 = 0
+    var star: i64 = -1
+    var mark: i64 = 0
+    while ti < n {
+        var adv: bool = false
+        if pi < m {
+            if str_char(pattern, pi) == str_char(topic, ti) {
+                pi = pi + 1
+                ti = ti + 1
+                adv = true
+            } else if str_char(pattern, pi) == "*" {
+                star = pi
+                mark = ti
+                pi = pi + 1
+                adv = true
+            }
+        }
+        if !adv {
+            if star >= 0 {
+                pi = star + 1
+                mark = mark + 1
+                ti = mark
+            } else {
+                return 0
+            }
+        }
+    }
+    while pi < m {
+        if str_char(pattern, pi) != "*" { return 0 }
+        pi = pi + 1
+    }
+    return 1
+}
+
+// 扇出：匹配订阅者（去重，保留首次出现序）
+pub func hub_fanout(patterns: table<string>, sp: table<string>, topic: string) -> table<string> {
+    var out: table<string> = []
+    var i: i64 = 0
+    while i < len(patterns) {
+        if sp[i] != "" && topic_match(patterns[i], topic) == 1 {
+            var dup: bool = false
+            var j: i64 = 0
+            while j < len(out) {
+                if out[j] == sp[i] { dup = true }
+                j = j + 1
+            }
+            if !dup { table_push(out, sp[i]) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
 }   // namespace tink3
