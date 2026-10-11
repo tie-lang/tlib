@@ -1090,4 +1090,84 @@ pub func tx_done(st: table<i64>) -> i64 {
     return 0
 }
 
+// ==================== 聚合与批量（§5.8） ====================
+// BATCH（0x07）：纯传输容器 —— count u16 + (len u16 + 内层帧) × count。
+// 内层帧 = 完整 16B 头 + [扩展区] + [载荷]，**无尾部**：内层帧的 PROTECTED/CRC 位
+// 必须为 0（封套唯一落点——批 = 单一认证单元，要么全好要么全拒）。
+// 拆包后与逐帧到达完全等价：批边界永不进入语义层（seq/流控/可靠性单位 = 内层帧）。
+// 明文模式：BATCH 帧自身可带 CRC32C（覆盖整个批体，机制见 frame_encode）。
+// 密封批（PROTECTED BATCH）：单 16B tag 摊薄认证开销（密码层负责密封；本节强制结构纪律）。
+
+// 打批：内层帧（拼接字节，逐帧无尾）→ BATCH body；非法输入 → 空表
+// 校验：逐帧结构合法；PROTECTED/CRC 位必须为 0；单帧总长 ≤ 65535；帧数 1..65535
+pub func batch_pack(frames: table<i64>) -> table<i64> {
+    var out = table_new_i64()
+    var offs = table_new_i64()
+    var lens = table_new_i64()
+    var pos: i64 = 0
+    while pos < len(frames) {
+        var (ok, ty, fl, sd, sq, bo, bl, eo, el, iok, nx) = frame_view(frames, pos)
+        if ok != 1 { return out }
+        if (fl & 2) != 0 || (fl & 4) != 0 { return out }
+        var tot = nx - pos
+        if tot > 65535 { return out }
+        table_push(offs, pos)
+        table_push(lens, tot)
+        pos = nx
+    }
+    var cnt = len(offs)
+    if cnt < 1 || cnt > 65535 { return out }
+    table_push(out, (cnt >> 8) & 0xFF)
+    table_push(out, cnt & 0xFF)
+    var i: i64 = 0
+    while i < cnt {
+        var l = lens[i]
+        table_push(out, (l >> 8) & 0xFF)
+        table_push(out, l & 0xFF)
+        var s = offs[i]
+        var j: i64 = 0
+        while j < l {
+            table_push(out, frames[s + j] & 0xFF)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 拆批：BATCH body（缓冲区间 [off, off+n)）→ (ok, offs, lens)
+//   offs/lens：内层帧视图（同一缓冲内偏移/长度，零拷贝）
+// 校验：结构（count/len 恰好消耗 n、无残余）；每个内层帧经完整帧解析
+//   （含魔力/版本/保留位）；内层帧 PROTECTED/CRC 位必须为 0。
+pub func batch_unpack(b: table<i64>, off: i64, n: i64) -> (i64, table<i64>, table<i64>) {
+    var offs = table_new_i64()
+    var lens = table_new_i64()
+    if off < 0 || n < 2 || off + n > len(b) { return (0, offs, lens) }
+    var cnt = bytes.from_u16_be(b, off)
+    var p = off + 2
+    var end = off + n
+    var i: i64 = 0
+    while i < cnt {
+        if p + 2 > end { return (0, offs, lens) }
+        var l = bytes.from_u16_be(b, p)
+        p = p + 2
+        if p + l > end { return (0, offs, lens) }
+        var (ok, ty, fl, sd, sq, bo, bl, eo, el, iok, nx) = frame_view(b, p)
+        if ok != 1 || nx != p + l { return (0, offs, lens) }
+        if (fl & 2) != 0 || (fl & 4) != 0 { return (0, offs, lens) }
+        table_push(offs, p)
+        table_push(lens, l)
+        p = p + l
+        i = i + 1
+    }
+    if p != end { return (0, offs, lens) }
+    return (1, offs, lens)
+}
+
+// 批帧：BATCH body 装入 ft_batch（明文模式 prot 传 fl_crc() 或 0；
+//   PROTECTED 密封由密码层在密封后装配——本层拒绝，防「声称加密而未加密」）
+pub func batch_frame(stream_id: i64, seq: i64, frames: table<i64>, prot: i64) -> table<i64> {
+    return frame_encode(ft_batch(), prot, stream_id, seq, batch_pack(frames), table_new_i64())
+}
+
 }   // namespace tink3

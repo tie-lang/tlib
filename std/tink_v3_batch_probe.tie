@@ -1,0 +1,168 @@
+type tie<logic>
+// std/tink_v3_batch_probe.tie —— tink v3 聚合与批量探针（设计文档 §5.8 验收）
+// 覆盖：BATCH 打包/拆包往返（混合 5 帧）与逐帧字节等价 + 视图字段/扩展区可读；
+//   内层 CRC/PROTECTED 位拒收（打包与拆包两侧）；残余/截断/计数谎报拒收；
+//   批帧 CRC 覆盖整批；密封批结构（编码未接线 = 拒；解码结构可辨 iok=-1）；
+//   开销对比（64 帧：逐帧尾 3328B vs 批量 3222B；tag 摊薄 ≥10×）；
+//   批量写（256 帧单块缓冲 + 行走计数）；非零偏移拆包。
+// 每项 PASS 打 `tinkv3b:<name>:OK`；失败 `tinkv3b:<name>:FAIL` 并把返回码置 1。
+// 全部 PASS 打印 `tinkv3b:ALL:PASS` 且 exit 0。
+
+import "./tink_v3.tie" as t3
+import "./bytes.tie" as bytes
+import "./time.tie" as time
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkv3b:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkv3b:" + name + ":OK")
+    }
+}
+
+func cat2(a: table<i64>, b: table<i64>) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < len(a) {
+        table_push(o, a[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(b) {
+        table_push(o, b[i])
+        i = i + 1
+    }
+    return o
+}
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+// 缓冲区间 [off, off+n) 与期望帧逐字节相等
+func frame_eq(b: table<i64>, off: i64, n: i64, exp: table<i64>) -> bool {
+    if n != len(exp) { return false }
+    var i: i64 = 0
+    while i < n {
+        if (b[off + i] & 0xFF) != (exp[i] & 0xFF) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+
+    // ---- 1) 打包/拆包往返（混合 5 帧：消息×2 / PING / STREAM / 带扩展消息） ----
+    var f1 = t3.msg_frame(pat(10), 1, 0, 0)
+    var f2 = t3.msg_frame(pat(33), 1, 1, 0)
+    var f3 = t3.ping_frame(0, 2, 0x55AA55AA, 0)
+    var f4 = t3.stream_chunk(pat(50), 2, 3, 0, false, 0)
+    var f5 = t3.frame_encode(t3.ft_message(), t3.fl_ext(), 1, 4, pat(7), t3.ext_tlv_u8(t3.tlv_priority(), 5))
+    var inner = cat2(cat2(cat2(cat2(f1, f2), f3), f4), f5)
+    var body = t3.batch_pack(inner)
+    expect(len(body) == 2 + (2 + len(f1)) + (2 + len(f2)) + (2 + len(f3)) + (2 + len(f4)) + (2 + len(f5)), "pack_size")
+    var (u1, o1, l1) = t3.batch_unpack(body, 0, len(body))
+    expect(u1 == 1 && len(o1) == 5 && l1[0] == len(f1) && l1[4] == len(f5), "unpack_count")
+    expect(frame_eq(body, o1[0], l1[0], f1) && frame_eq(body, o1[1], l1[1], f2), "unpack_bytes12")
+    expect(frame_eq(body, o1[2], l1[2], f3) && frame_eq(body, o1[3], l1[3], f4) && frame_eq(body, o1[4], l1[4], f5), "unpack_bytes345")
+    var (w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10) = t3.frame_view(body, o1[0])
+    var (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) = t3.frame_view(body, o1[2])
+    var (y0, y1, y2, y3, y4, y5, y6, y7, y8, y9, y10) = t3.frame_view(body, o1[4])
+    expect(w0 == 1 && w1 == t3.ft_message() && w4 == 0 && x1 == t3.ft_ping() && x4 == 2 && y1 == t3.ft_message() && y4 == 4 && y8 == 5, "unpack_view_fields")
+    expect(t3.ext_u8(body, y7, y8, t3.tlv_priority()) == 5, "unpack_ext_read")
+
+    // ---- 2) 内层带尾拒收（打包侧） ----
+    var fc = t3.msg_frame(pat(4), 1, 0, crc)
+    expect(len(t3.batch_pack(fc)) == 0, "pack_reject_crc_inner")
+    var ph = t3.header_encode(t3.ft_message(), t3.fl_protected(), 1, 1, 4)
+    var fp = cat2(cat2(ph, pat(4)), pat(16))
+    expect(len(t3.batch_pack(fp)) == 0, "pack_reject_protected_inner")
+
+    // ---- 3) 拆包侧拒收（内层带尾） ----
+    var bd1 = cat2(cat2(bytes.to_u16_be(1), bytes.to_u16_be(len(fc))), fc)
+    var (v1o, v1a, v1b) = t3.batch_unpack(bd1, 0, len(bd1))
+    expect(v1o == 0, "unpack_reject_crc_inner")
+    var bd2 = cat2(cat2(bytes.to_u16_be(1), bytes.to_u16_be(len(fp))), fp)
+    var (v2o, v2a, v2b) = t3.batch_unpack(bd2, 0, len(bd2))
+    expect(v2o == 0, "unpack_reject_protected_inner")
+
+    // ---- 4) 结构拒收：残余 / 截断 / 计数谎报 / 非零偏移正常 ----
+    var bd3 = cat2(body, bytes.to_u16_be(0))
+    var (v3o, v3a, v3b) = t3.batch_unpack(bd3, 0, len(bd3))
+    expect(v3o == 0, "unpack_residual_reject")
+    var (v4o, v4a, v4b) = t3.batch_unpack(body, 0, len(body) - 1)
+    expect(v4o == 0, "unpack_truncated_reject")
+    var bd5 = bytes.slice(body, 0, len(body))
+    bd5[1] = 6
+    var (v5o, v5a, v5b) = t3.batch_unpack(bd5, 0, len(bd5))
+    expect(v5o == 0, "unpack_count_lie")
+    var wrap = cat2(pat(13), body)
+    var (v6o, v6a, v6b) = t3.batch_unpack(wrap, 13, len(body))
+    expect(v6o == 1 && len(v6a) == 5 && frame_eq(wrap, v6a[0], v6b[0], f1), "unpack_at_offset")
+
+    // ---- 5) 批帧与密封批结构 ----
+    var bfr = t3.batch_frame(0, 0, inner, crc)
+    var (q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10) = t3.frame_view(bfr, 0)
+    expect(q0 == 1 && q1 == t3.ft_batch() && q9 == 1 && q10 == len(bfr), "batch_frame_crc")
+    var (u5, o5, l5) = t3.batch_unpack(bfr, q5, q6)
+    expect(u5 == 1 && len(o5) == 5, "batch_frame_unpack")
+    expect(len(t3.batch_frame(0, 0, inner, t3.fl_protected())) == 0, "sealed_unwired")
+    var sbh = t3.header_encode(t3.ft_batch(), t3.fl_protected(), 0, 0, len(body))
+    var sbf = cat2(cat2(sbh, body), pat(16))
+    var (s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10) = t3.frame_view(sbf, 0)
+    expect(s0 == 1 && s1 == t3.ft_batch() && s9 == -1 && s10 == len(sbf), "sealed_struct")
+
+    // ---- 6) 开销对比（64 帧 × 32B 载荷） ----
+    var many = table_new_i64()
+    var mi: i64 = 0
+    while mi < 64 {
+        many = cat2(many, t3.msg_frame(pat(32), 1, mi, 0))
+        mi = mi + 1
+    }
+    var b64f = t3.batch_frame(0, 0, many, crc)
+    var per_total: i64 = 64 * (16 + 32 + 4)
+    var batch_total: i64 = len(b64f)
+    expect(per_total == 3328 && batch_total == 3222 && per_total - batch_total == 106, "overhead_exact")
+    var tag_per: i64 = 64 * 16
+    var tag_batch: i64 = 16
+    expect(tag_per / tag_batch >= 10, "overhead_tag_10x")
+
+    // ---- 7) 批量写（256 帧单块缓冲）与行走 ----
+    var bulk = table_new_i64()
+    var bi: i64 = 0
+    while bi < 256 {
+        bulk = cat2(bulk, t3.msg_frame(pat(16), 1, bi, 0))
+        bi = bi + 1
+    }
+    var wc: i64 = 0
+    var wp: i64 = 0
+    while wp < len(bulk) {
+        wc = wc + 1
+        wp = t3.frame_skip(bulk, wp)
+    }
+    var t0 = time.now_ms()
+    var bb = t3.batch_pack(bulk)
+    var (uc, oc, lc) = t3.batch_unpack(bb, 0, len(bb))
+    var t1 = time.now_ms()
+    println("PERF-BATCH: frames=" + to_string(wc) + " pack_unpack_ms=" + to_string(t1 - t0) + " batch_bytes=" + to_string(len(bb)))
+    expect(wc == 256 && uc == 1 && len(oc) == 256, "bulk_write_walk")
+
+    // ---- 收尾 ----
+    if g_rc == 0 {
+        println("tinkv3b:ALL:PASS")
+    } else {
+        println("tinkv3b:ALL:FAIL")
+    }
+    return g_rc
+}
