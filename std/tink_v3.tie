@@ -44,6 +44,7 @@ import "./bytes.tie" as bytes
 import "./x25519.tie" as x25519
 import "./ed25519.tie" as ed25519
 import "./hkdf.tie" as hkdf
+import "./chacha20.tie" as chacha20
 
 // CRC32C 查表（Castagnoli，反射多项式 0x82F63B78；懒构建一次，见 crc32c_ensure）
 var crc32c_tab: table<i64>;
@@ -1511,6 +1512,159 @@ pub func hs_keys(shared_hex: string) -> (string, string, string, string, string)
             hkdf.expand(prk, label_hex("tink v3 c ap traffic"), 32),
             hkdf.expand(prk, label_hex("tink v3 s ap traffic"), 32),
             hkdf.expand(prk, label_hex("tink v3 exp master"), 32))
+}
+
+// ==================== 密封、重钥与抗重放（§6.3/§6.4/§6.5） ====================
+// 帧密封：nonce(12B) = 方向字 1B + 纪元 1B + 计数器 10B BE（发帧计数，单调不回绕）；
+// AAD = 头 16B + 扩展区（含 ext_len 前缀＝帧首至载荷前）；载荷 = 明文分块加密
+// （ChaCha20 计数器自 1 起）；tag 16B 置尾（ChaCha20-Poly1305）。
+// AEAD 密钥 = HKDF-Expand(应用秘密, "tink v3 key", 32)。
+// 重钥：新秘密 = HKDF-Expand(旧秘密, "tink v3 ku", 32)；phase 位翻转（§6.4）。
+// 抗重放：会话内滑窗 ±1024（32×u32 位图），重复/过旧 = 丢弃 + 计数（不报错）。
+
+pub func dir_ctos() -> i64 { return 0 }
+pub func dir_stoc() -> i64 { return 1 }
+pub func rp_window() -> i64 { return 1024 }
+
+// 帧 AEAD 密钥派生（应用秘密 → ChaCha20 密钥 hex）
+pub func hs_aead_key(secret_hex: string) -> string {
+    return hkdf.expand(secret_hex, label_hex("tink v3 key"), 32)
+}
+
+// 12B nonce：方向 1 + 纪元 1 + 计数器 10B BE
+func seal_nonce(dir: i64, epoch: i64, ctr: i64) -> table<i64> {
+    var n = table_new_i64()
+    table_push(n, dir & 0xFF)
+    table_push(n, epoch & 0xFF)
+    var i: i64 = 9
+    while i >= 0 {
+        table_push(n, (ctr >> (i * 8)) & 0xFF)
+        i = i - 1
+    }
+    return n
+}
+
+// 密封一帧（PROTECTED 由本函数置位；调用方 flags 不得预置 PROTECTED/CRC）
+pub func frame_seal(ftype: i64, flags: i64, stream_id: i64, seq: i64, payload: table<i64>, ext: table<i64>, key_hex: string, dir: i64, epoch: i64, ctr: i64) -> table<i64> {
+    var empty0 = table_new_i64()
+    if (flags & 2) != 0 || (flags & 4) != 0 { return empty0 }
+    var has_ext: bool = (flags & 1) != 0
+    if !has_ext && len(ext) > 0 { return empty0 }
+    if !type_writable(ftype) { return empty0 }
+    var plen = len(payload)
+    if plen > 65535 { return empty0 }
+    var elen = len(ext)
+    if elen > 65535 { return empty0 }
+    var fl: i64 = flags | 2
+    var a = header_encode(ftype, fl, stream_id, seq, plen)
+    if has_ext {
+        var pre = table_new_i64()
+        table_push(pre, (elen >> 8) & 0xFF)
+        table_push(pre, elen & 0xFF)
+        a = bytes.concat(a, bytes.concat(pre, ext))
+    }
+    var nh = bytes.to_hex(seal_nonce(dir, epoch, ctr))
+    var ct = chacha20.xor_stream(key_hex, nh, 1, payload)
+    var th = chacha20.aead_mac(key_hex, nh, a, ct)
+    return bytes.concat(bytes.concat(a, ct), bytes.from_hex(th))
+}
+
+// 开启并解密：→ (ok, 明文, next)；1 成功 / -1 结构坏或非保护帧 / 0 认证失败
+pub func frame_open(b: table<i64>, pos: i64, key_hex: string, dir: i64, epoch: i64, ctr: i64) -> (i64, table<i64>, i64) {
+    var empty0 = table_new_i64()
+    var (ok, ty, fl, sd, sq, bo, bl, eo, el, iok, nx) = frame_view(b, pos)
+    if ok != 1 || (fl & 2) == 0 { return (-1, empty0, -1) }
+    var aad = bytes.slice(b, pos, bo)
+    var ct = bytes.slice(b, bo, bo + bl)
+    var tag = bytes.slice(b, nx - 16, nx)
+    var nh = bytes.to_hex(seal_nonce(dir, epoch, ctr))
+    var th = chacha20.aead_mac(key_hex, nh, aad, ct)
+    if !chacha20.ct_eq(bytes.from_hex(th), tag) { return (0, empty0, nx) }
+    var pt = chacha20.xor_stream(key_hex, nh, 1, ct)
+    return (1, pt, nx)
+}
+
+// 重钥：新秘密（§6.4）
+pub func ku_next(old_secret_hex: string) -> string {
+    return hkdf.expand(old_secret_hex, label_hex("tink v3 ku"), 32)
+}
+
+// KEY_UPDATE 帧（body = phase u8）
+pub func key_update_frame(stream_id: i64, seq: i64, phase: i64, prot: i64) -> table<i64> {
+    var t = table_new_i64()
+    table_push(t, phase & 0xFF)
+    return frame_encode(ft_key_update(), prot, stream_id, seq, t, table_new_i64())
+}
+
+// ---------- 抗重放滑窗（§6.5） ----------
+
+// 新滑窗：st = [largest(-1 空), 32×u32 位图]（位 i ↔ delta = largest − seq）
+pub func rp_new() -> table<i64> {
+    var st = table_new_i64()
+    table_push(st, -1)
+    var i: i64 = 0
+    while i < 32 {
+        table_push(st, 0)
+        i = i + 1
+    }
+    return st
+}
+
+func rp_clear(ref st: table<i64>) {
+    var i: i64 = 0
+    while i < 32 {
+        st[1 + i] = 0
+        i = i + 1
+    }
+}
+
+func rp_mark(ref st: table<i64>, i: i64) {
+    var w = i / 32
+    var b = i % 32
+    st[1 + w] = st[1 + w] | (1 << b)
+}
+
+// 检查并记录 seq：1 = 新（接受）/ 0 = 重放或过旧（丢弃）
+pub func rp_check(ref st: table<i64>, seq: i64) -> i64 {
+    if seq < 0 { return 0 }
+    var largest = st[0]
+    if largest < 0 {
+        st[0] = seq
+        rp_clear(st)
+        rp_mark(st, 0)
+        return 1
+    }
+    if seq > largest {
+        var k = seq - largest
+        if k >= 1024 {
+            rp_clear(st)
+        } else {
+            var ws = k / 32
+            var bs = k % 32
+            var w: i64 = 31
+            while w >= 0 {
+                var src = w - ws
+                var lo: i64 = 0
+                if src >= 0 { lo = st[1 + src] & 0xFFFFFFFF }
+                var hi: i64 = 0
+                if bs > 0 && src - 1 >= 0 { hi = st[1 + src - 1] & 0xFFFFFFFF }
+                var v: i64 = lo
+                if bs > 0 { v = ((lo << bs) | (hi >> (32 - bs))) & 0xFFFFFFFF }
+                st[1 + w] = v
+                w = w - 1
+            }
+        }
+        st[0] = seq
+        rp_mark(st, 0)
+        return 1
+    }
+    var delta = largest - seq
+    if delta >= 1024 { return 0 }
+    var w2 = delta / 32
+    var b3 = delta % 32
+    if ((st[1 + w2] >> b3) & 1) != 0 { return 0 }
+    rp_mark(st, delta)
+    return 1
 }
 
 }   // namespace tink3
