@@ -1,5 +1,5 @@
 type tie<logic>
-// std/tink_v3_relay_probe.tie —— tink v3 中继与迁移探针（设计文档 §4.6/§5.6 验收）
+// std/tink_relay_probe.tie —— tink v3 中继与迁移探针（设计文档 §4.6/§5.6 验收）
 // 覆盖：FORWARD 编解码（target ‖ 内层帧、内层字节保真）；relay 不解密载荷（只读 target、
 // 密封内层照转、目的端可解）；转发接受/拒绝（已知目标接受；自身/未知拒绝；0x06xx 码）；
 // CONN_ID 扩展区往返；迁移接管（同 ID + 已认证 → 接受 epoch+1；ID 不符/未认证 → 拒绝）；
@@ -7,7 +7,7 @@ type tie<logic>
 // 每项 PASS 打 `tinkv3x:<name>:OK`；失败 `tinkv3x:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3x:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0

@@ -8,7 +8,6 @@ type tie<logic>
 
 import "./tink_v2.tie" as t2
 import "./blake3.tie" as blake3
-import "./tink.tie" as tink
 import "./time.tie" as time
 
 // 跨语言 KAT 常量（首次运行由下面 println 打印实际值，固化后填回断言）。
@@ -207,8 +206,23 @@ func main() -> i64 {
     expect(len(joinedBad) == 0, "stream_seq_damage")
 
     // ---- 8) v1 兼容读（CRC32 帧经 v2 解析，crc 通过 integrity_ok=1） ----
+    // v1 帧内联构造（v1 库已退役）：[len u32 BE][payload][crc32-IEEE]；
+    // crc32("123456789") = 0xCBF43926
     var pV = ascii("123456789")
-    var frV = tink.frame_encode(pV)
+    var frV = table_new_i64()
+    table_push(frV, 0)
+    table_push(frV, 0)
+    table_push(frV, 0)
+    table_push(frV, 9)
+    var vk2: i64 = 0
+    while vk2 < 9 {
+        table_push(frV, pV[vk2])
+        vk2 = vk2 + 1
+    }
+    table_push(frV, 0xCB)
+    table_push(frV, 0xF4)
+    table_push(frV, 0x39)
+    table_push(frV, 0x26)
     var (ok8, fl8, el8, pl8, ex8, iok8, np8) = t2.frame_next(frV, 0)
     expect(ok8 == 1 && fl8 == 0 && iok8 == 1 && eqbytes(pl8, pV), "v1_compat")
 

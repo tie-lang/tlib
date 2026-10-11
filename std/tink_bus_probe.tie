@@ -1,5 +1,5 @@
 type tie<logic>
-// std/tink_v3_bus_probe.tie —— tink v3 总线探针（设计文档 §7/§4.4 验收）
+// std/tink_bus_probe.tie —— tink v3 总线探针（设计文档 §7/§4.4 验收）
 // 覆盖：REGISTER/LOOKUP/LOOKUP_REPLY/SUBSCRIBE/UNSUBSCRIBE/PUBLISH/MULTICAST 编解码；
 //   peer_id（algo 前缀）与条目扫描；通配匹配（精确/前缀/后缀/中缀/多星/全星/不匹配）；
 //   hub 名字路由（注册/更新/注销/查询）；订阅扇出（去重 + 退订）；线格式端到端
@@ -7,7 +7,7 @@ type tie<logic>
 // 每项 PASS 打 `tinkv3u:<name>:OK`；失败 `tinkv3u:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3u:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0

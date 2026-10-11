@@ -1,12 +1,12 @@
 type tie<logic>
-// std/tink_v3_msg_probe.tie —— tink v3 消息与流探针（设计文档 §5.2 验收）
+// std/tink_msg_probe.tie —— tink v3 消息与流探针（设计文档 §5.2 验收）
 // 覆盖：PING/PONG nonce；RESET/STOP code；MESSAGE 单帧/分片/乱序重组/重复去重/
 //   缺片拒收/重叠冲突拒收/无 FIN 拒收/空消息；65536 边界；STREAM 块重组/乱序/
 //   空洞前缀/内容冲突拒收；DATAGRAM（CRC 与裸）；PROTECTED 分片拒收。
 // 每项 PASS 打 `tinkv3m:<name>:OK`；失败 `tinkv3m:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3m:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0

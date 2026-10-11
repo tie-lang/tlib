@@ -5,7 +5,7 @@ type tie<class>
 // 用途：tink v3 Secure 默认套件 TINK_CHACHA20_POLY1305_SHA256 的 AEAD 原语。
 // 实现纪律：32 位字全 i64 承载（每步 & 0xFFFFFFFF 恒正）；旋转 = (v<<n)|(v>>(32-n))；
 //   tag 比较走常数时间累加（无早退分支）。
-// KAT：RFC 8439 §2.3.2 / §2.4.2 / §2.5.2 / §2.8.2 全向量（见 std/tink_v3_aead_probe.tie）。
+// KAT：RFC 8439 §2.3.2 / §2.4.2 / §2.5.2 / §2.8.2 全向量（见 std/tink_aead_probe.tie）。
 
 import "./bytes.tie" as bytes
 import "./poly1305.tie" as poly

@@ -1,5 +1,5 @@
 type tie<logic>
-// std/tink_v3_rlt_probe.tie —— tink v3 可靠传输探针（设计文档 §5.3 验收）
+// std/tink_rlt_probe.tie —— tink v3 可靠传输探针（设计文档 §5.3 验收）
 // 覆盖：ACK 范围编解码（字节级 KAT + 覆盖语义 + 反推）；接收端重排/重复丢弃/
 //   前推消费/ACK 策略（2 帧或 25ms）；发送端确定性丢包注入（全达 + 尝试计数）；
 //   RTO 退避序列（0/333/999/2331/4995/10323）与 5 次重传耗尽 → RESET(0x0104)；
@@ -7,7 +7,7 @@ type tie<logic>
 // 每项 PASS 打 `tinkv3r:<name>:OK`；失败 `tinkv3r:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3r:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0

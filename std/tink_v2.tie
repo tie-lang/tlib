@@ -28,7 +28,6 @@ type tie<class>
 
 import "./bytes.tie" as bytes
 import "./blake3.tie" as blake3
-import "./tink.tie" as tink
 import "./x25519.tie" as x25519
 import "./hkdf.tie" as hkdf
 import "./ascon_mac.tie" as ascon
@@ -293,6 +292,28 @@ pub func frame_encode(payload: table<i64>, flags: i64, ext: table<i64>) -> table
 // 从 bytes[pos..] 解析一帧 → (ok, flags, ext_len, payload, ext, integrity_ok, next_pos)。
 // ok=1 解析成功（含 v1 兼容帧，此时 flags=0、integrity 校验=v1 crc 是否通过）、
 // 0 失败（缓冲不足/魔数不符且非 v1/版本不支持）；integrity_ok 为校验统一出口。
+// CRC32-IEEE（反射式逐位，poly 0xEDB88320）——v1 帧兼容读专用；
+// v1 库（std/tink 旧代）已退役，此处内联自包含（与 zlib.crc32 一致）。
+func crc32_ieee(p: table<i64>) -> i64 {
+    var c: i64 = 0xFFFFFFFF
+    var n = len(p)
+    var i: i64 = 0
+    while i < n {
+        c = c ^ (p[i] & 0xFF)
+        var k: i64 = 0
+        while k < 8 {
+            if (c & 1) != 0 {
+                c = (c >> 1) ^ 0xEDB88320
+            } else {
+                c = c >> 1
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return c ^ 0xFFFFFFFF
+}
+
 pub func frame_next(bytes: table<i64>, pos: i64) -> (i64, i64, i64, table<i64>, table<i64>, i64, i64) {
     var empty = table_new_i64()
     var nb = len(bytes)
@@ -361,7 +382,7 @@ pub func frame_next(bytes: table<i64>, pos: i64) -> (i64, i64, i64, table<i64>, 
     var vp = slice(bytes, pos + 4, pos + 4 + n)
     var crc = u32rd(bytes, pos + 4 + n)
     var vok: i64 = 0
-    if tink.crc32(vp) == crc { vok = 1 }
+    if crc32_ieee(vp) == crc { vok = 1 }
     return (1, 0, 0, vp, empty, vok, pos + 8 + n)
 }
 

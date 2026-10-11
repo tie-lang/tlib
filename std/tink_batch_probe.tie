@@ -1,5 +1,5 @@
 type tie<logic>
-// std/tink_v3_batch_probe.tie —— tink v3 聚合与批量探针（设计文档 §5.8 验收）
+// std/tink_batch_probe.tie —— tink v3 聚合与批量探针（设计文档 §5.8 验收）
 // 覆盖：BATCH 打包/拆包往返（混合 5 帧）与逐帧字节等价 + 视图字段/扩展区可读；
 //   内层 CRC/PROTECTED 位拒收（打包与拆包两侧）；残余/截断/计数谎报拒收；
 //   批帧 CRC 覆盖整批；密封批结构（编码未接线 = 拒；解码结构可辨 iok=-1）；
@@ -8,7 +8,7 @@ type tie<logic>
 // 每项 PASS 打 `tinkv3b:<name>:OK`；失败 `tinkv3b:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3b:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 import "./time.tie" as time
 

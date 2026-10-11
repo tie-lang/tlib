@@ -1,5 +1,5 @@
 type tie<logic>
-// std/tink_v3_rtt_probe.tie —— tink v3 0-RTT 恢复探针（设计文档 §5.6/§6.5 验收）
+// std/tink_rtt_probe.tie —— tink v3 0-RTT 恢复探针（设计文档 §5.6/§6.5 验收）
 // 覆盖：票据构造/扫描/HMAC 验真/篡改拒绝/TTL 上限；兑换流程（接受/有效期内重放拒绝/
 //   过期拒绝/单次性烧毁持久/未烧毁过期转普通拒绝）；恢复密钥 KAT（Python 独立推演）；
 //   early data 幂等位策略；RESUME 摘要（nstreams+各流 next_seq）往返；TICKET/RESUME
@@ -7,7 +7,7 @@ type tie<logic>
 // 每项 PASS 打 `tinkv3t:<name>:OK`；失败 `tinkv3t:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3t:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0

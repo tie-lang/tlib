@@ -1,12 +1,12 @@
 type tie<logic>
-// std/tink_v3_fc_probe.tie —— tink v3 流控与调度探针（设计文档 §5.4/§5.5 验收）
+// std/tink_fc_probe.tie —— tink v3 流控与调度探针（设计文档 §5.4/§5.5 验收）
 // 覆盖：MAX_DATA/MAX_STREAM_DATA/DATA_BLOCKED/STREAM_BLOCKED 编解码（含短体拒绝）；
 //   双层额度引擎（流级耗尽/连接级耗尽/单向与双向恢复/未知流）；BLOCKED 通告载荷；
 //   优先级调度序（URGENT/控制优先 + 加权配额精确序列）；饿死断言（×3 轮）。
 // 每项 PASS 打 `tinkv3f:<name>:OK`；失败 `tinkv3f:<name>:FAIL` 并把返回码置 1。
 // 全部 PASS 打印 `tinkv3f:ALL:PASS` 且 exit 0。
 
-import "./tink_v3.tie" as t3
+import "./tink.tie" as t3
 import "./bytes.tie" as bytes
 
 var g_rc: i64 = 0
