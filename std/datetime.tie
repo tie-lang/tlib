@@ -46,8 +46,8 @@ func fdiv(a: i64, b: i64) -> i64 {
     return (a - b + 1) / b
 }
 
-// 向下取整的余数（0<=r<b）。
-func fmod(a: i64, b: i64) -> i64 {
+// 向下取整的余数（0<=r<b）；命名避开 tiec 内建 fmod（f64 数学内建会劫持同名用户函数）。
+func floor_mod(a: i64, b: i64) -> i64 {
     return a - fdiv(a, b) * b
 }
 
@@ -134,7 +134,7 @@ func civil_from_days(z: i64) -> (i64, i64, i64) {
 
 // 星期（0=周日..6=周六）。ed=epoch_days。
 func weekday(ed: i64) -> i64 {
-    return fmod((ed + 4) % 7, 7)
+    return floor_mod((ed + 4) % 7, 7)
 }
 
 // 由墙钟字段构 DateTime（默认 UTC，offset=0），附带星期。
@@ -167,7 +167,7 @@ pub func to_epoch(dt: DateTime) -> i64 {
 // UTC 秒 → DateTime（offset=0）。
 pub func from_epoch(sec: i64) -> DateTime {
     var days = fdiv(sec, 86400)
-    var r = fmod(sec, 86400)
+    var r = floor_mod(sec, 86400)
     var c = civil_from_days(days)
     var dt = DateTime()
     dt.y = c.0
@@ -203,7 +203,7 @@ pub func now_local(off: i64) -> DateTime {
 pub func add_seconds(dt: DateTime, delta: i64) -> DateTime {
     var total = epoch_days(dt.y, dt.mo, dt.d) * 86400 + dt.h * 3600 + dt.mi * 60 + dt.s + delta
     var days = fdiv(total, 86400)
-    var r = fmod(total, 86400)
+    var r = floor_mod(total, 86400)
     var c = civil_from_days(days)
     var out = DateTime()
     out.y = c.0
