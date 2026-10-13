@@ -358,38 +358,104 @@ pub func seq_reverse<T>(ref t: table<T>) -> table<T> {
     return t
 }
 
-// 升序排序（稳定插入排序，原地生效并返回自身）。
-// 复杂度 O(n²) 移动 / O(n²) 比较；典型规模（千级以内）足够，大表升级归并另议。
+// 升序排序（**稳定**，自底向上归并，原地生效并返回自身）。
+// 复杂度 O(n log n)（比较与写入同阶）；迭代式不递归；辅助表一轮内复用。
 pub func seq_sort<T>(ref t: table<T>) -> table<T> {
     var n = len(t)
-    var i: i64 = 1
-    while i < n {
-        var cur = t[i]
-        var j: i64 = i
-        while j > 0 && cur < t[j - 1] {
-            t[j] = t[j - 1]
-            j = j - 1
+    if n < 2 {
+        return t
+    }
+    var aux: table<T> = []
+    var j: i64 = 0
+    while j < n {
+        table_push(aux, t[j])
+        j = j + 1
+    }
+    var width: i64 = 1
+    while width < n {
+        var lo: i64 = 0
+        while lo < n {
+            var mid = lo + width
+            if mid > n {
+                mid = n
+            }
+            var hi = lo + 2 * width
+            if hi > n {
+                hi = n
+            }
+            var a = lo
+            var b = mid
+            var k: i64 = lo
+            while k < hi {
+                // 稳定性：`<=` 时取左run
+                if a < mid && (b >= hi || !(t[b] < t[a])) {
+                    aux[k] = t[a]
+                    a = a + 1
+                } else {
+                    aux[k] = t[b]
+                    b = b + 1
+                }
+                k = k + 1
+            }
+            lo = lo + 2 * width
         }
-        t[j] = cur
-        i = i + 1
+        var m: i64 = 0
+        while m < n {
+            t[m] = aux[m]
+            m = m + 1
+        }
+        width = width * 2
     }
     return t
 }
 
-// 以比较函数排序（cmp(a, b) = 「a 应排在 b 前」；稳定，原地生效并返回自身）。
+// 以比较函数排序（cmp(a, b) = 「a 应排在 b 前」；**稳定**，同归并实现）。
 // 数据作末参：`xs -> seq_sort_by(cmp)`。
 pub func seq_sort_by<T>(cmp: fn(T, T) -> bool, ref t: table<T>) -> table<T> {
     var n = len(t)
-    var i: i64 = 1
-    while i < n {
-        var cur = t[i]
-        var j: i64 = i
-        while j > 0 && cmp(cur, t[j - 1]) {
-            t[j] = t[j - 1]
-            j = j - 1
+    if n < 2 {
+        return t
+    }
+    var aux: table<T> = []
+    var j: i64 = 0
+    while j < n {
+        table_push(aux, t[j])
+        j = j + 1
+    }
+    var width: i64 = 1
+    while width < n {
+        var lo: i64 = 0
+        while lo < n {
+            var mid = lo + width
+            if mid > n {
+                mid = n
+            }
+            var hi = lo + 2 * width
+            if hi > n {
+                hi = n
+            }
+            var a = lo
+            var b = mid
+            var k: i64 = lo
+            while k < hi {
+                // 稳定性：右侧不先于左侧时取左run
+                if a < mid && (b >= hi || !cmp(t[b], t[a])) {
+                    aux[k] = t[a]
+                    a = a + 1
+                } else {
+                    aux[k] = t[b]
+                    b = b + 1
+                }
+                k = k + 1
+            }
+            lo = lo + 2 * width
         }
-        t[j] = cur
-        i = i + 1
+        var m: i64 = 0
+        while m < n {
+            t[m] = aux[m]
+            m = m + 1
+        }
+        width = width * 2
     }
     return t
 }
@@ -492,5 +558,6 @@ pub func seq_group_by<T>(key: fn(T) -> string, t: table<T>) -> map<table<T>> {
 }
 
 }
+
 
 

@@ -17,6 +17,11 @@ type tie<class>
 // 调用：import 后 sort.sort_i64(t) / sort.insert_sorted_i64(t, v) / sort.contains_i64(t, x)
 // 命名规范：命名空间内函数不加 sort_ 前缀（sort_i64/sort_string 是算法+元素类型
 //   后缀特例，与 insert_sorted_*/contains_* 的 *_i64/_string 命轴对称，非模块前缀）。
+// 与前置库的关系（2026-10-13）：泛型排序与去重走编译器前置（无需 import）——
+//   seq_sort / seq_sort_by / seq_distinct（prelude lang 家族，稳定归并 O(n log n)，
+//   原地 ref 返回自身）。本模块保留双职：① 显式命名空间版（冒泡，专注简单性）；
+//   ② 二分查找与有序插入——排序表上的 O(log n) 查询（index_of_*/contains_*），
+//   前置无对应物。
 
 namespace sort {
 // 对无序 i64 表 t 冒泡排序（升序）。ref 表参数：排序结果写回调用方实参槽。
