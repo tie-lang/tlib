@@ -474,6 +474,91 @@ pub func seq_distinct<T>(t: table<T>) -> table<T> {
     return out
 }
 
+// ---- 6.11 惰性流（拉取协议 `fn() -> Option<T>`，2026-10-13）----
+// 流 = 每次调用返回下一个元素的函数：Some(元素)，取尽后恒 None。for 语句直接
+// 消费（拉取循环：Some 绑定元素执行循环体、None 退出）；适配器逐元素传递，
+// take 短路后不再向上游拉取（实测：10 元素源 take(3) 只映射 3 次）。
+pub func stream_from<T>(xs: table<T>) -> fn() -> Option<T> {
+    var i: i64 = 0
+    return func() -> Option<T> {
+        if i < len(xs) {
+            var v = xs[i]
+            i = i + 1
+            return Option.Some(v)
+        }
+        return Option.None
+    }
+}
+
+// 逐元素变换：`xs -> stream_from() -> stream_map(f)`。
+pub func stream_map<T, U>(f: fn(T) -> U, it: fn() -> Option<T>) -> fn() -> Option<U> {
+    return func() -> Option<U> {
+        var m = it()?
+        return Option.Some(f(m))
+    }
+}
+
+// 保留判定为真的元素（内部循环跳过不合格项）。
+pub func stream_filter<T>(p: fn(T) -> bool, it: fn() -> Option<T>) -> fn() -> Option<T> {
+    return func() -> Option<T> {
+        var m = it()?
+        while !p(m) {
+            m = it()?
+        }
+        return Option.Some(m)
+    }
+}
+
+// 取前 n 个元素（到量即 None，且不再向上游拉取）。
+pub func stream_take<T>(n: i64, it: fn() -> Option<T>) -> fn() -> Option<T> {
+    var cnt: i64 = 0
+    return func() -> Option<T> {
+        if cnt >= n {
+            return Option.None
+        }
+        var m = it()?
+        cnt = cnt + 1
+        return Option.Some(m)
+    }
+}
+
+// 注：stream_zip（产出 (a_i, b_i) 元组流）待泛型系统开放 tuple 实参后补
+//（现行 E00566：泛型实参不能是 tuple 类型）——表域已有 iter_zip。
+
+// 注：stream_chain（先后串接两路）待缺陷修复后补——泛型返回闭包内的
+// switch-case 绑定当前不过（最小复：泛型 fn 返回的闭包体内 `case Option.Some(v)`
+// 报「变量 'v' 未入作用域」）；表域可用 tbl_cat 或两段 collect 拼接。
+
+// 消费：拉空成表。
+pub func stream_collect<T>(it: fn() -> Option<T>) -> table<T> {
+    var out: table<T> = []
+    var go: bool = true
+    while go {
+        var m = it()
+        switch m {
+            case Option.None:
+                go = false
+            case Option.Some(v):
+                table_push(out, v)
+        }
+    }
+    return out
+}
+
+// 消费：逐元素应用（数据作末参：`it -> stream_each(f)`）。
+pub func stream_each<T>(f: fn(T), it: fn() -> Option<T>) {
+    var go: bool = true
+    while go {
+        var m = it()
+        switch m {
+            case Option.None:
+                go = false
+            case Option.Some(v):
+                f(v)
+        }
+    }
+}
+
 // ---- 6.11 迭代器适配（2026-10-13 落地，急求值版）----
 // 语义：逐元素变换/过滤/截取，返回新表；可直接接箭头链。惰性流式留待迭代器
 // 句柄引入后演进（接口不变）。
@@ -558,6 +643,7 @@ pub func seq_group_by<T>(key: fn(T) -> string, t: table<T>) -> map<table<T>> {
 }
 
 }
+
 
 
 
