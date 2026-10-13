@@ -27,7 +27,7 @@ type tie<class>
 import "../../std/time.tie" as tm
 
 // ---- kernel32 真休眠（Win 语义；i64 形参直通 DWORD 低 32 位）----
-unsafe extern fn Sleep(dwMilliseconds: i64) -> i32
+unsafe extern fn Sleep(dwMilliseconds: u32)
 
 // 模块级全局：主机 → 下一允许时刻（ms）
 var g_hosts: table<string> = []
@@ -79,7 +79,7 @@ pub func wait(host: string, delay_ms: i64, now: i64) -> i64 {
     var w = g_next[idx] - now
     if w > 0 {
         unsafe {
-            Sleep(w)
+            Sleep(to_u32(w))
         }
     } else {
         w = 0
