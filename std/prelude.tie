@@ -341,4 +341,96 @@ pub func tbl_cat<T>(a: table<T>, b: table<T>) -> table<T> {
     return out
 }
 
+// ---- 2.20 集合批（2026-10-13）：原地操作返回自身（可接管道），产新值不动入参。----
+// 全部泛型实现；元素需支持 `<` / `==`（i64 / f64 / string 等标量族）。
+
+// 逆置（原地生效并返回自身）。
+pub func seq_reverse<T>(ref t: table<T>) -> table<T> {
+    var n = len(t)
+    var i: i64 = 0
+    while i < n / 2 {
+        var j = n - 1 - i
+        var tmp = t[i]
+        t[i] = t[j]
+        t[j] = tmp
+        i = i + 1
+    }
+    return t
 }
+
+// 升序排序（稳定插入排序，原地生效并返回自身）。
+// 复杂度 O(n²) 移动 / O(n²) 比较；典型规模（千级以内）足够，大表升级归并另议。
+pub func seq_sort<T>(ref t: table<T>) -> table<T> {
+    var n = len(t)
+    var i: i64 = 1
+    while i < n {
+        var cur = t[i]
+        var j: i64 = i
+        while j > 0 && cur < t[j - 1] {
+            t[j] = t[j - 1]
+            j = j - 1
+        }
+        t[j] = cur
+        i = i + 1
+    }
+    return t
+}
+
+// 以比较函数排序（cmp(a, b) = 「a 应排在 b 前」；稳定，原地生效并返回自身）。
+// 数据作末参：`xs -> seq_sort_by(cmp)`。
+pub func seq_sort_by<T>(cmp: fn(T, T) -> bool, ref t: table<T>) -> table<T> {
+    var n = len(t)
+    var i: i64 = 1
+    while i < n {
+        var cur = t[i]
+        var j: i64 = i
+        while j > 0 && cmp(cur, t[j - 1]) {
+            t[j] = t[j - 1]
+            j = j - 1
+        }
+        t[j] = cur
+        i = i + 1
+    }
+    return t
+}
+
+// 保序去重（返回新表，不改入参）。O(n²) 相等扫描。
+pub func seq_distinct<T>(t: table<T>) -> table<T> {
+    var out: table<T> = []
+    var n = len(t)
+    var i: i64 = 0
+    while i < n {
+        if !seq_has(out, t[i]) {
+            table_push(out, t[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 按键分组（key 返回字符串键；返回 map<table<T>>，键序按 map_keys 升序）。
+// 数据作末参：`xs -> seq_group_by(k -> k.city)`。
+pub func seq_group_by<T>(key: fn(T) -> string, t: table<T>) -> map<table<T>> {
+    var out: map<table<T>> = {}
+    var n = len(t)
+    var i: i64 = 0
+    while i < n {
+        var k = key(t[i])
+        if map_contains(out, k) {
+            // COW 惯用法：读出的值表可能因共享被复制，push 后必须**回写**，
+            // 否则复制体丢弃、分组表只留最后一笔（COW 陷阱实测）。
+            var cur = out[k]
+            table_push(cur, t[i])
+            out[k] = cur
+        } else {
+            var nt: table<T> = []
+            table_push(nt, t[i])
+            out[k] = nt
+        }
+        i = i + 1
+    }
+    return out
+}
+
+}
+
