@@ -408,6 +408,65 @@ pub func seq_distinct<T>(t: table<T>) -> table<T> {
     return out
 }
 
+// ---- 6.11 迭代器适配（2026-10-13 落地，急求值版）----
+// 语义：逐元素变换/过滤/截取，返回新表；可直接接箭头链。惰性流式留待迭代器
+// 句柄引入后演进（接口不变）。
+
+// 逐元素变换，产出 f(元素)。数据作末参：`xs -> iter_map(f)`。
+pub func iter_map<T, U>(f: fn(T) -> U, xs: table<T>) -> table<U> {
+    var out: table<U> = []
+    var i: i64 = 0
+    while i < len(xs) {
+        table_push(out, f(xs[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// 保留判定为真的元素。数据作末参：`xs -> iter_filter(p)`。
+pub func iter_filter<T>(p: fn(T) -> bool, xs: table<T>) -> table<T> {
+    var out: table<T> = []
+    var i: i64 = 0
+    while i < len(xs) {
+        if p(xs[i]) {
+            table_push(out, xs[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 取前 n 个元素（不足则全取）。数据作末参：`xs -> iter_take(n)`。
+pub func iter_take<T>(n: i64, xs: table<T>) -> table<T> {
+    var out: table<T> = []
+    var i: i64 = 0
+    while i < len(xs) && i < n {
+        table_push(out, xs[i])
+        i = i + 1
+    }
+    return out
+}
+
+// 两路并读，产出 (a_i, b_i) 元组，短者取尽即止。
+pub func iter_zip<A, B>(a: table<A>, b: table<B>) -> table<(A, B)> {
+    var out: table<(A, B)> = []
+    var n = len(a)
+    if len(b) < n {
+        n = len(b)
+    }
+    var i: i64 = 0
+    while i < n {
+        table_push(out, (a[i], b[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// 先后串接两路元素（同 tbl_cat 语义；管道读出更顺）。
+pub func iter_chain<T>(a: table<T>, b: table<T>) -> table<T> {
+    return tbl_cat(a, b)
+}
+
 // 按键分组（key 返回字符串键；返回 map<table<T>>，键序按 map_keys 升序）。
 // 数据作末参：`xs -> seq_group_by(k -> k.city)`。
 pub func seq_group_by<T>(key: fn(T) -> string, t: table<T>) -> map<table<T>> {
@@ -433,4 +492,5 @@ pub func seq_group_by<T>(key: fn(T) -> string, t: table<T>) -> map<table<T>> {
 }
 
 }
+
 
