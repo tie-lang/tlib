@@ -1,0 +1,104 @@
+type tie<logic>
+// _tinker_x.tie —— tinker（v3 帧，tiec 工具链）↔ tlib tink 字节级交叉对拍（本地探针，不入库）
+import "./tink.tie" as t3
+import "./bytes.tie" as bytes
+import "../../tie-repo/tiec/compiler/tinker/tinker_frame.tie" as tinker
+
+var g_rc: i64 = 0
+
+func expect(cond: bool, name: string) {
+    if !cond {
+        println("tinkerx:" + name + ":FAIL")
+        g_rc = 1
+    } else {
+        println("tinkerx:" + name + ":OK")
+    }
+}
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func ascii(s: string) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < str_len(s) {
+        table_push(o, char_code(str_char(s, i)) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+
+    // CRC32C KAT 对齐
+    var nine = ascii("123456789")
+    expect(tinker.crc32c(nine) == 0xE3069283 && t3.crc32c_range(nine, 0, 9) == 0xE3069283, "crc_kat")
+
+    // 单帧字节一致（CRC|FIN）
+    var p1 = pat(1000)
+    var a = tinker.frame_encode(p1)
+    var b = t3.frame_encode(0x04, 4 | 8, 0, 0, p1, empty)
+    expect(bytes.to_hex(a) == bytes.to_hex(b), "single_byte_equal")
+
+    // 交叉解码
+    var (o1, ty, fl, sd, sq, bo, bl, eo, el, iok, nx) = t3.frame_view(a, 0)
+    expect(o1 == 1 && ty == 0x04 && iok == 1 && nx == len(a), "tlib_reads_tinker")
+    var (p1b, n1b) = tinker.frame_next(b, 0)
+    expect(n1b == len(b) && bytes.to_hex(p1b) == bytes.to_hex(p1), "tinker_reads_tlib")
+
+    // 大载荷分片（200000B → 4 片）字节一致 vs msg_split
+    var big = pat(200000)
+    var fa = tinker.frame_encode(big)
+    var fb = t3.msg_split(big, 0, 0, 65531, crc)
+    expect(bytes.to_hex(fa) == bytes.to_hex(fb), "frag_byte_equal")
+
+    // 交叉重组
+    var (jb, jn) = tinker.frame_next(fa, 0)
+    expect(jn == len(fa) && bytes.to_hex(jb) == bytes.to_hex(big), "tinker_reassembles")
+    var (mj, mp) = t3.msg_join(fa)
+    expect(mj == 1 && bytes.to_hex(mp) == bytes.to_hex(big), "tlib_reassembles")
+
+    // 边界：65531 单帧 / 65532 两片
+    var e1 = tinker.frame_encode(pat(65531))
+    var e1b = t3.frame_encode(0x04, 4 | 8, 0, 0, pat(65531), empty)
+    expect(bytes.to_hex(e1) == bytes.to_hex(e1b), "boundary_65531")
+    var e2 = tinker.frame_encode(pat(65532))
+    var e2b = t3.msg_split(pat(65532), 0, 0, 65531, crc)
+    expect(bytes.to_hex(e2) == bytes.to_hex(e2b), "boundary_65532")
+
+    // 篡改拒帧 / v1 帧拒收（断代）
+    var t1 = tinker.frame_encode(pat(200))
+    t1[20] = (t1[20] ^ 0x01) & 0xFF
+    var (q1, q2) = tinker.frame_next(t1, 0)
+    expect(q2 < 0 && len(q1) == 0, "tamper_reject")
+    var v1f = table_new_i64()
+    table_push(v1f, 0)
+    table_push(v1f, 0)
+    table_push(v1f, 0)
+    table_push(v1f, 3)
+    table_push(v1f, 0xAA)
+    table_push(v1f, 0xBB)
+    table_push(v1f, 0xCC)
+    table_push(v1f, 0)
+    table_push(v1f, 0)
+    table_push(v1f, 0)
+    table_push(v1f, 0)
+    var (w1, w2) = tinker.frame_next(v1f, 0)
+    expect(w2 < 0, "v1_rejected")
+
+    if g_rc == 0 {
+        println("tinkerx:ALL:PASS")
+    } else {
+        println("tinkerx:ALL:FAIL")
+    }
+    return g_rc
+}

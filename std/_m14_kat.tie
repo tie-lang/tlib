@@ -1,0 +1,83 @@
+type tie<logic>
+// _m14_kat.tie —— tink v3 多语言 KAT 向量生成器（本地；输出供 c/rust/python/java 探针固化）
+import "./tink.tie" as t3
+import "./bytes.tie" as bytes
+
+func pat(n: i64) -> table<i64> {
+    var o = table_new_i64()
+    var i: i64 = 0
+    while i < n {
+        table_push(o, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return o
+}
+
+func pat_s(n: i64) -> string {
+    var sb = string_builder()
+    var i: i64 = 0
+    while i < n {
+        sb_append_byte(sb, (i * 7 + 3) & 0xFF)
+        i = i + 1
+    }
+    return sb_build(sb)
+}
+
+func hexh(t: table<i64>, a: i64, b: i64) -> string {
+    return bytes.to_hex(bytes.slice(t, a, b))
+}
+
+func main() -> i64 {
+    var empty = table_new_i64()
+    var crc = t3.fl_crc()
+
+    // 1) CRC32C 向量
+    println("K1A " + to_string(t3.crc32c_range(pat(9), 0, 9)))
+    var z32 = bytes.fill(32, 0)
+    var ff32 = bytes.fill(32, 0xFF)
+    var inc = pat(32)
+    var inca = table_new_i64()
+    var zi: i64 = 0
+    while zi < 32 {
+        table_push(inca, zi)
+        zi = zi + 1
+    }
+    println("K1B " + to_string(t3.crc32c_range(z32, 0, 32)))
+    println("K1C " + to_string(t3.crc32c_range(ff32, 0, 32)))
+    println("K1D " + to_string(t3.crc32c_range(inca, 0, 32)))
+
+    // 2) 单帧（"hello tink v3" 13B；MESSAGE/CRC|FIN）
+    var p1 = pat_s(13)  // 占位——实际用固定 ASCII 由测试端构造；这里生成 pattern 版本
+    var f1 = t3.frame_encode(0x04, 4 | 8, 0, 0, pat(13), empty)
+    println("K2 " + bytes.to_hex(f1))
+
+    // 3) 单帧（64B 递增）
+    var f2 = t3.frame_encode(0x04, 4 | 8, 0, 0, inca, empty)
+    println("K3 " + bytes.to_hex(f2))
+
+    // 4) 分片（70000B pattern → 2 帧）：头 16B / 尾 4B / 二帧头 20B / 总长
+    var big = pat(70000)
+    var frs = t3.msg_split(big, 0, 0, 65531, crc)
+    var pos = t3.frame_skip(frs, 0)
+    println("K4LE " + to_string(len(frs)))
+    println("K4F0H " + hexh(frs, 0, 16))
+    println("K4F0T " + hexh(frs, pos - 4, pos))
+    println("K4F1H " + hexh(frs, pos, pos + 20))
+    println("K4F1T " + hexh(frs, len(frs) - 4, len(frs)))
+
+    // 5) 带扩展区单帧：payload = "x"（1B）+ ext = TLV(priority=5)
+    var xp = bytes.from_hex("78")
+    var fex = t3.frame_encode(0x04, 4 | 8 | 1, 0, 0, xp, t3.ext_tlv_u8(t3.tlv_priority(), 5))
+    println("K5 " + bytes.to_hex(fex))
+
+    // 6) 空载荷帧（len=0）
+    var f0 = t3.frame_encode(0x04, 4 | 8, 0, 0, empty, empty)
+    println("K6 " + bytes.to_hex(f0))
+
+    // 7) len=65535 帧头（较大，仅打印头 16B 与尾 4B）
+    var fmax = t3.frame_encode(0x04, 4 | 8, 0, 0, pat(65535), empty)
+    println("K7LE " + to_string(len(fmax)))
+    println("K7H " + hexh(fmax, 0, 16))
+    println("K7T " + hexh(fmax, len(fmax) - 4, len(fmax)))
+    return 0
+}

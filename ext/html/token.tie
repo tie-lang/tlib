@@ -47,27 +47,27 @@ type tie<class>
 import "./entities.tie" as entitytab
 
 // ---- token 类型常量（文件级全局；上层模块直接裸名引用）----
-const MTK_OPEN: i64 = 1;
-const MTK_CLOSE: i64 = 2;
-const MTK_SELF: i64 = 3;
-const MTK_TEXT: i64 = 4;
-const MTK_COMMENT: i64 = 5;
+pub const MTK_OPEN: i64 = 1;
+pub const MTK_CLOSE: i64 = 2;
+pub const MTK_SELF: i64 = 3;
+pub const MTK_TEXT: i64 = 4;
+pub const MTK_COMMENT: i64 = 5;
 const MTK_DOCTYPE: i64 = 6;
-const MTK_RAW: i64 = 7;
-const MTK_CDATA: i64 = 8;
-const MTK_PI: i64 = 9;   // 处理指令（strict=1 输出；HTML 路径不产生）
+pub const MTK_RAW: i64 = 7;
+pub const MTK_CDATA: i64 = 8;
+pub const MTK_PI: i64 = 9;   // 处理指令（strict=1 输出；HTML 路径不产生）
 
 // ---- 结构错误码（strict=1 记录到 tk_errcode；ext/xml 头注释给完整错误表）----
 const XENONE: i64 = 0;       // 无错误
-const XENAME: i64 = 1;       // 标签/属性名含非法字符（XML Name 规则）
-const XEUNQUOTED: i64 = 2;   // 属性值未加引号（或无 '=' 无值）
-const XELTEXT: i64 = 3;      // 文本内容出现孤立 '<'（非合法标记开头）
-const XEBADMARK: i64 = 4;    // 标记结构非法（未知 '<!' 声明 / PI 未闭合 / 闭标签后多余字符）
-const XENTUNK: i64 = 5;      // 未识别的实体引用（非最小集命名实体 / 畸形数字实体 / 裸 '&'）
-const XENTCHAR: i64 = 6;     // 数字实体解码出非法 XML 码点
-const XENOMATCH: i64 = 7;    // 闭标签与最近开标签不配对（或栈空闭标签）——上层判定
-const XEMULTIROOT: i64 = 8;  // 文档含多个根元素或根外非空白文本——上层判定
-const XEUNCLOSED: i64 = 9;   // 文档尾仍有未闭合标签——上层判定
+pub const XENAME: i64 = 1;       // 标签/属性名含非法字符（XML Name 规则）
+pub const XEUNQUOTED: i64 = 2;   // 属性值未加引号（或无 '=' 无值）
+pub const XELTEXT: i64 = 3;      // 文本内容出现孤立 '<'（非合法标记开头）
+pub const XEBADMARK: i64 = 4;    // 标记结构非法（未知 '<!' 声明 / PI 未闭合 / 闭标签后多余字符）
+pub const XENTUNK: i64 = 5;      // 未识别的实体引用（非最小集命名实体 / 畸形数字实体 / 裸 '&'）
+pub const XENTCHAR: i64 = 6;     // 数字实体解码出非法 XML 码点
+pub const XENOMATCH: i64 = 7;    // 闭标签与最近开标签不配对（或栈空闭标签）——上层判定
+pub const XEMULTIROOT: i64 = 8;  // 文档含多个根元素或根外非空白文本——上层判定
+pub const XEUNCLOSED: i64 = 9;   // 文档尾仍有未闭合标签——上层判定
 
 // ---- token 流（模块级全局；scan 开头重置；参考 std/json 的节点存储风格）----
 var tk_ty: table<i64>;         // token 类型（MTK_* 常量）
