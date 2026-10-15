@@ -28,3 +28,6 @@ opencode.json
 _idle_*.txt
 _tlib_audit*.txt
 std/big_probe.tie
+
+# 本地材料（探针/调试；不入库）
+_local_only/
