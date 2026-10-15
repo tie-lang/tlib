@@ -50,6 +50,7 @@ type tie<class>
 
 import "./blake3.tie" as blake3
 import "./zlib.tie" as zlib
+import "./rans.tie" as rans
 
 namespace tzp {
 
@@ -64,6 +65,7 @@ pub func profile_archive() -> i64 { return 1 }
 pub func hash_blake3() -> i64 { return 1 }
 pub func method_store() -> i64 { return 0 }
 pub func method_deflate() -> i64 { return 8 }
+pub func method_rans() -> i64 { return 16 }
 pub func header_len() -> i64 { return 60 }
 pub func fp_hex_len() -> i64 { return 64 }
 pub func head_chk_len() -> i64 { return 16 }
@@ -378,7 +380,7 @@ pub func tzp_pack_ex(names: table<string>, blobs: table<string>, method: i64, ma
     if n != len(blobs) {
         return ""
     }
-    if method != method_store() && method != method_deflate() {
+    if method != method_store() && method != method_deflate() && method != method_rans() {
         return ""
     }
     // 逐条校验
@@ -418,6 +420,8 @@ pub func tzp_pack_ex(names: table<string>, blobs: table<string>, method: i64, ma
                 var comp = zlib.deflate(from_blob(raw))
                 payload = to_blob(comp)
             }
+        } else if method == method_rans() {
+            payload = rans.rans_compress(raw)
         }
         if data_len + len(payload) > max_total {
             return ""
@@ -587,7 +591,7 @@ func check_index(z: string) -> (i64, i64, i64, i64) {
         if off < 0 || stlen < 0 || rlen < 0 {
             return (d_index_struct(), 0, 0, 0)
         }
-        if meth != method_store() && meth != method_deflate() {
+        if meth != method_store() && meth != method_deflate() && meth != method_rans() {
             return (d_index_struct(), 0, 0, 0)
         }
         if off + stlen > data_len {
@@ -652,6 +656,16 @@ func extract_entry(z: string, off: i64, stlen: i64, rlen: i64, method: i64) -> (
             return (false, "")
         }
         return (true, out)
+    }
+    if method == method_rans() {
+        var rd = rans.rans_decompress(raw)
+        if rd.0 == false {
+            return (false, "")
+        }
+        if len(rd.1) != rlen {
+            return (false, "")
+        }
+        return (true, rd.1)
     }
     return (false, "")
 }
