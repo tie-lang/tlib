@@ -31,3 +31,5 @@ std/big_probe.tie
 
 # 本地材料（探针/调试；不入库）
 _local_only/
+# tpkg 规范
+target/
