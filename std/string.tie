@@ -104,67 +104,71 @@ pub func slice(s: string, start: i64, end: i64) -> string {
     return sb_build(sb)
 }
 
-// 判断 s 是否包含子串 sub；空子串视为包含
-pub func contains(s: string, sub: string) -> bool {
-    var n: i64 = str_len(s)
-    var m: i64 = str_len(sub)
-    // 空子串总是包含
-    if m == 0 {
-        return true
-    }
-    // 子串比主串长，不可能包含
-    if m > n {
-        return false
-    }
-    // 从每个起点位置尝试完整匹配
-    var i: i64 = 0
-    while i <= n - m {
-        var j: i64 = 0
-        var matched: bool = true
-        while j < m && matched {
-            if str_char(s, i + j) != str_char(sub, j) {
-                matched = false
-            }
-            j = j + 1
-        }
-        if matched {
-            return true
-        }
-        i = i + 1
-    }
-    return false
-}
-
-// 返回子串 sub 在 s 中首次出现的位置（字符索引，从 0 起）；未找到返回 -1。
-// 空子串视为在位置 0 命中；子串比主串长必然未找到。
-// 与 contains 同扫描模式：从每个起点完整匹配，命中即返回该起点。
-pub func find(s: string, sub: string) -> i64 {
-    var n: i64 = str_len(s)
-    var m: i64 = str_len(sub)
-    // 空子串：位置 0 命中
-    if m == 0 {
+// 字节级子串定位（内部）：返回子串首次出现的**字节偏移**；未找到 -1。
+// ★ 性能（2026-10-18）：旧实现用 str_char 逐码点比较，而 str_char 是 O(偏移)
+//   的（UTF-8 码点索引要从头扫）⇒ 整体 O(n²·m)。实测对 73KB 源码做 7 字节
+//   子串搜索需 63 秒（tiec 的 prelude 前置判定走 str.find），把「顶层函数数 ~
+//   编译时间」拖成平方关系。改为 str_byte（O(1) 字节访问）后为 O(n·m)。
+// 只从码点起始字节起匹配（跳过 0x80..0xBF 续字节），结果必落在码点边界。
+func find_byte(immut s: string, immut sub: string) -> i64 {
+    var nb: i64 = len(s)
+    var mb: i64 = len(sub)
+    if mb == 0 {
         return 0
     }
-    // 子串比主串长，不可能匹配
-    if m > n {
+    if mb > nb {
         return -1
     }
+    var c0 = str_byte(sub, 0)
     var i: i64 = 0
-    while i <= n - m {
-        var j: i64 = 0
-        var matched: bool = true
-        while j < m && matched {
-            if str_char(s, i + j) != str_char(sub, j) {
-                matched = false
+    while i <= nb - mb {
+        var b = str_byte(s, i)
+        if (b & 192) != 128 && b == c0 {
+            var j: i64 = 1
+            var ok: bool = true
+            while j < mb && ok {
+                if str_byte(s, i + j) != str_byte(sub, j) {
+                    ok = false
+                }
+                j = j + 1
             }
-            j = j + 1
-        }
-        if matched {
-            return i
+            if ok {
+                return i
+            }
         }
         i = i + 1
     }
     return -1
+}
+
+// 字节偏移 → 码点索引（数 [0, byte_off) 内的非续字节）。
+func cp_index_of(immut s: string, byte_off: i64) -> i64 {
+    var k: i64 = 0
+    var i: i64 = 0
+    while i < byte_off {
+        if (str_byte(s, i) & 192) != 128 {
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return k
+}
+
+// 判断 s 是否包含子串 sub；空子串视为包含
+pub func contains(immut s: string, immut sub: string) -> bool {
+    return find_byte(s, sub) >= 0
+}
+
+// 返回子串 sub 在 s 中首次出现的位置（**码点索引**，从 0 起）；未找到返回 -1。
+// 空子串视为在位置 0 命中；子串比主串长必然未找到。
+// 实现：字节级定位（find_byte）后把字节偏移折算成码点索引——对纯 ASCII 两者相等，
+// 非 ASCII 只在命中后多一次 O(偏移) 计数（不再是每个起点都做 O(偏移) 的 str_char）。
+pub func find(immut s: string, immut sub: string) -> i64 {
+    var b = find_byte(s, sub)
+    if b <= 0 {
+        return b
+    }
+    return cp_index_of(s, b)
 }
 
 // 判断 s 是否以 prefix 开头；空前缀视为真
